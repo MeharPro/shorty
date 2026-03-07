@@ -90,3 +90,63 @@ export interface SavedExport {
   sourcePublicId: string;
   payload: string;
 }
+
+export interface ReelScoreBreakdown {
+  hookStrength: number;
+  standaloneClarity: number;
+  emotionalImpact: number;
+  novelty: number;
+  pacing: number;
+  visualEngagement: number;
+  insightDensity: number;
+}
+
+export interface ReelCandidate {
+  id: string;
+  rank: number;
+  title: string;
+  startOffset: number;
+  duration: number;
+  transcriptExcerpt: string;
+  hook: string;
+  captionLines: string[];
+  viralityScore: number;
+  scoreBreakdown: ReelScoreBreakdown;
+  reasoning: string[];
+  editingPlan: string[];
+  analysisSource: 'transcript' | 'visual';
+  deliveryUrl: string;
+  posterUrl: string;
+  downloadUrl: string;
+  aiPreviewUrl: string | null;
+}
+
+export interface ReelGenerationResponse {
+  generatedAt: string;
+  source: {
+    mode: 'cloudinary-public-id' | 'remote-fetch';
+    publicId: string | null;
+    secureUrl: string | null;
+    duration: number;
+  };
+  transcriptUsed: boolean;
+  visualSignalsUsed: boolean;
+  recommendedClipId: string | null;
+  clips: ReelCandidate[];
+}
+
+export interface ReelHistoryEntry {
+  id: string;
+  createdAt: string;
+  sourceLabel: string;
+  recommendedClipId: string | null;
+  result: ReelGenerationResponse;
+}
+
+export interface VideoTranscriptionResponse {
+  transcript: string;
+  provider: string;
+  model: string;
+  sourceUrl: string;
+  generatedAt: string;
+}

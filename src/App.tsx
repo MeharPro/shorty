@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AuthPage } from './pages/AuthPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { Feature1Page } from './pages/Feature1Page';
+import { Feature2Page } from './pages/Feature2Page';
 import {
   clearSession,
   createShortySession,
@@ -34,7 +36,8 @@ function App() {
 
       const nextSession = createShortySession(
         supabaseSession.user.email,
-        supabaseSession.user.user_metadata?.full_name
+        supabaseSession.user.user_metadata?.full_name,
+        supabaseSession.user.id
       );
       saveSession(nextSession);
       setSession(nextSession);
@@ -53,7 +56,8 @@ function App() {
 
       const nextSession = createShortySession(
         supabaseSession.user.email,
-        supabaseSession.user.user_metadata?.full_name
+        supabaseSession.user.user_metadata?.full_name,
+        supabaseSession.user.id
       );
       saveSession(nextSession);
       setSession(nextSession);
@@ -82,7 +86,8 @@ function App() {
   return (
     <Routes>
       <Route path="/" element={<DashboardPage session={session} onLogout={handleLogout} />} />
-      <Route path="/dashboard" element={<Navigate replace to="/" />} />
+      <Route path="/feature1" element={<Feature1Page session={session} />} />
+      <Route path="/feature2" element={<Feature2Page session={session} />} />
       <Route path="/login" element={<AuthPage mode="login" onAuth={handleAuth} />} />
       <Route path="/signup" element={<AuthPage mode="signup" onAuth={handleAuth} />} />
       <Route path="*" element={<Navigate replace to="/" />} />
