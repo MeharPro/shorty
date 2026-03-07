@@ -26,6 +26,12 @@ export default function handler(_req, res) {
       baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
       model: process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1',
     },
+    brainrot: {
+      hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+      geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+      hasElevenLabsKey: Boolean(process.env.ELEVENLABS_API_KEY),
+      elevenLabsModel: process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2',
+    },
     generatedAt: new Date().toISOString(),
   });
 }
