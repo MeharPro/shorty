@@ -28,6 +28,7 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
 
     const trimmedEmail = email.trim();
     const trimmedPassword = password.trim();
+
     if (!trimmedEmail || !trimmedPassword) {
       setAuthMessage('Email and password are required.');
       return;
@@ -50,107 +51,105 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
 
       onAuth(createShortySession(trimmedEmail, isSignup ? name : undefined));
       setPassword('');
-      navigate('/dashboard');
+      navigate('/');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="shorty-route">
-      <header className="shorty-route-header">
-        <Link className="shorty-route-header__brand" to="/">
-          <span className="shorty-route-header__logo-wrap">
-            <img className="shorty-route-header__logo" src={boltLogo} alt="Shorty logo" />
+    <div className="purity-auth-route">
+      <section className="purity-auth-shell">
+        <Link className="purity-auth-shell__brand" to="/">
+          <span className="purity-sidebar__brand-mark purity-sidebar__brand-mark--centered">
+            <img alt="Shorty logo" src={boltLogo} />
           </span>
-          <span className="shorty-route-header__meta">
-            <strong>Shorty</strong>
-            <span>Creator Studio</span>
+          <span className="purity-auth-shell__brand-copy">
+            <strong>Shorty Dashboard</strong>
+            <span>{isSignup ? 'Create account' : 'Sign in'}</span>
           </span>
         </Link>
 
-        <nav className="shorty-route-header__nav">
-          <Link to="/">Home</Link>
-          <Link to="/dashboard">Dashboard</Link>
-          <Link to={isSignup ? '/login' : '/signup'}>{isSignup ? 'Login' : 'Signup'}</Link>
-        </nav>
-      </header>
+        <div className="purity-auth-shell__grid">
+          <section className="purity-auth-panel purity-auth-panel--intro">
+            <span className="purity-section-heading__eyebrow">
+              {isSignup ? 'Sign up' : 'Sign in'}
+            </span>
+            <h1>{isSignup ? 'Create your workspace.' : 'Return to the editor.'}</h1>
+            <p>
+              {hasSupabaseBrowserConfig
+                ? 'Use the account flow to sync sessions and snapshots across devices.'
+                : 'Auth is optional right now, but adding an account keeps the dashboard ready for sync later.'}
+            </p>
 
-      <main className="shorty-auth-grid">
-        <section className="shorty-auth-panel shorty-auth-panel--info">
-          <span className="shorty-home-panel__eyebrow">{isSignup ? 'Signup' : 'Login'}</span>
-          <h1>{isSignup ? 'Create a workspace identity.' : 'Return to the dashboard.'}</h1>
-          <p>
-            {hasSupabaseBrowserConfig
-              ? 'Supabase auth is configured, so these screens now use the live email flow from the dev branch.'
-              : 'Supabase is not configured, so this page falls back to a local workspace identity.'}
-          </p>
+            <ul className="purity-auth-points">
+              <li>Keep dashboard access in one focused route</li>
+              <li>Attach a named identity to snapshots</li>
+              <li>Drop straight back into the tool after submit</li>
+            </ul>
+          </section>
 
-          <ul className="shorty-auth-points">
-            <li>Keep dashboard navigation organized</li>
-            <li>Preserve a named workspace identity</li>
-            <li>Move directly into creation after submit</li>
-          </ul>
-        </section>
+          <section className="purity-auth-panel">
+            <form className="purity-auth-form" onSubmit={handleSubmit}>
+              <div className="purity-auth-form__header">
+                <strong>{isSignup ? 'Create account' : 'Sign in'}</strong>
+                <span>
+                  {hasSupabaseBrowserConfig
+                    ? 'Uses Supabase when env vars are configured.'
+                    : 'Falls back to a local workspace identity.'}
+                </span>
+              </div>
 
-        <section className="shorty-auth-panel">
-          <form className="shorty-auth-form" onSubmit={handleSubmit}>
-            <div className="shorty-auth-form__header">
-              <strong>{isSignup ? 'Create account' : 'Sign in'}</strong>
-              <span>
-                {hasSupabaseBrowserConfig
-                  ? 'Uses Supabase auth when env vars are present.'
-                  : 'Uses local fallback when auth env vars are missing.'}
-              </span>
-            </div>
+              {isSignup ? (
+                <label className="purity-field">
+                  <span>Name</span>
+                  <input
+                    placeholder="Your workspace name"
+                    required
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                  />
+                </label>
+              ) : null}
 
-            {isSignup ? (
-              <label className="shorty-field">
-                <span>Name</span>
+              <label className="purity-field">
+                <span>Email</span>
                 <input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="Your workspace name"
+                  placeholder="creator@shorty.app"
                   required
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
                 />
               </label>
-            ) : null}
 
-            <label className="shorty-field">
-              <span>Email</span>
-              <input
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="creator@shorty.app"
-                type="email"
-                required
-              />
-            </label>
+              <label className="purity-field">
+                <span>Password</span>
+                <input
+                  placeholder="Enter your password"
+                  required
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+              </label>
 
-            <label className="shorty-field">
-              <span>Password</span>
-              <input
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Enter any password"
-                type="password"
-                required
-              />
-            </label>
+              <button className="purity-button purity-button--primary" disabled={isSubmitting} type="submit">
+                {isSubmitting ? 'Working...' : isSignup ? 'Create account' : 'Sign in'}
+              </button>
 
-            <button className="shorty-button shorty-button--solid" disabled={isSubmitting} type="submit">
-              {isSubmitting ? 'Working...' : isSignup ? 'Create account' : 'Sign in'}
-            </button>
+              {authMessage ? <p className="purity-auth-form__message">{authMessage}</p> : null}
 
-            {authMessage ? <p className="shorty-auth-form__message">{authMessage}</p> : null}
-
-            <p className="shorty-auth-form__switch">
-              {isSignup ? 'Already have a workspace?' : 'Need a workspace?'}{' '}
-              <Link to={isSignup ? '/login' : '/signup'}>{isSignup ? 'Log in' : 'Create one'}</Link>
-            </p>
-          </form>
-        </section>
-      </main>
+              <p className="purity-auth-form__switch">
+                {isSignup ? 'Already have an account?' : 'Need an account?'}{' '}
+                <Link to={isSignup ? '/login' : '/signup'}>
+                  {isSignup ? 'Sign in' : 'Create one'}
+                </Link>
+              </p>
+            </form>
+          </section>
+        </div>
+      </section>
     </div>
   );
 }
