@@ -1,7 +1,7 @@
 import { startTransition, useDeferredValue, useEffect, useState } from 'react';
 import { cloudName, uploadPreset } from './cloudinary/config';
 import { UploadWidget } from './cloudinary/UploadWidget';
-import type { CloudinaryUploadResult } from './cloudinary/UploadWidget';
+import type { CloudinaryUploadResult, UploadWidgetMode } from './cloudinary/UploadWidget';
 import {
   CAPTION_THEMES,
   PLATFORM_PRESETS,
@@ -30,12 +30,19 @@ import type {
 import './App.css';
 
 const DEFAULT_STORY_PRESET = STORY_PRESETS[0];
+const VIDEO_UPLOAD_FORMATS = ['mp4', 'mov', 'm4v', 'webm'];
 
 const DEFAULT_DRAFT: CreatorDraft = {
   captionThemeId: CAPTION_THEMES[0].id,
   platforms: PLATFORM_PRESETS.map((platform) => platform.id),
   ...DEFAULT_STORY_PRESET.defaults,
 };
+
+interface HealthPayload {
+  cloudinary?: {
+    hasSignedUploadConfig?: boolean;
+  };
+}
 
 function formatBytes(bytes?: number): string {
   if (!bytes) {
@@ -59,6 +66,45 @@ function formatDuration(seconds?: number): string {
   return `${mins}:${remaining.toString().padStart(2, '0')}`;
 }
 
+function getUploadChipLabel(uploadMode: UploadWidgetMode): string {
+  switch (uploadMode) {
+    case 'unsigned':
+      return 'Unsigned uploads';
+    case 'signed':
+      return 'Signed uploads';
+    case 'checking':
+      return 'Checking upload route';
+    default:
+      return 'Sample media mode';
+  }
+}
+
+function getUploadBadgeLabel(uploadMode: UploadWidgetMode): string {
+  switch (uploadMode) {
+    case 'unsigned':
+      return 'Unsigned widget ready';
+    case 'signed':
+      return 'Signed widget ready';
+    case 'checking':
+      return 'Checking signed route';
+    default:
+      return 'Uploads unavailable';
+  }
+}
+
+function getUploadReadinessLabel(uploadMode: UploadWidgetMode): string {
+  switch (uploadMode) {
+    case 'unsigned':
+      return 'Unsigned uploads are live through the Cloudinary preset.';
+    case 'signed':
+      return 'Signed uploads are live through /api/sign-cloudinary.';
+    case 'checking':
+      return 'Probing /api/health for a signed upload route.';
+    default:
+      return 'Use sample mode, add VITE_CLOUDINARY_UPLOAD_PRESET, or serve the signed Vercel route.';
+  }
+}
+
 function App() {
   const [draft, setDraft] = useState<CreatorDraft>(() => loadDraft() ?? DEFAULT_DRAFT);
   const [sourceAsset, setSourceAsset] = useState<MediaAsset>(SAMPLE_PRIMARY_ASSET);
@@ -70,6 +116,9 @@ function App() {
 
   const deferredDraft = useDeferredValue(draft);
   const hasUploadPreset = Boolean(uploadPreset);
+  const [uploadMode, setUploadMode] = useState<UploadWidgetMode>(
+    hasUploadPreset ? 'unsigned' : 'checking'
+  );
   const storyPreset =
     STORY_PRESETS.find((preset) => preset.id === draft.storyPresetId) ?? DEFAULT_STORY_PRESET;
   const captionTheme =
@@ -101,6 +150,53 @@ function App() {
   useEffect(() => {
     saveDraft(draft);
   }, [draft]);
+
+  useEffect(() => {
+    if (hasUploadPreset) {
+      setUploadMode('unsigned');
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    let active = true;
+    setUploadMode('checking');
+
+    async function probeUploadRoute() {
+      try {
+        const response = await fetch('/api/health', {
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error('Health route unavailable');
+        }
+
+        const payload = (await response.json()) as HealthPayload;
+        if (!active) {
+          return;
+        }
+
+        setUploadMode(payload.cloudinary?.hasSignedUploadConfig ? 'signed' : 'disabled');
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+
+        setUploadMode('disabled');
+      }
+    }
+
+    void probeUploadRoute();
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [hasUploadPreset]);
 
   useEffect(() => {
     if (!statusMessage) {
@@ -231,7 +327,7 @@ function App() {
           </div>
           <div className="hero-chips">
             <span className="chip">Cloud: {cloudName}</span>
-            <span className="chip">{hasUploadPreset ? 'Uploads enabled' : 'Sample media mode'}</span>
+            <span className="chip">{getUploadChipLabel(uploadMode)}</span>
             <span className="chip">
               {hasSupabaseBrowserConfig ? 'Supabase ready' : 'Supabase optional'}
             </span>
@@ -275,9 +371,7 @@ function App() {
                   the editing flow stabilizes.
                 </p>
               </div>
-              <span className="panel-badge">
-                {hasUploadPreset ? 'Unsigned widget ready' : 'Preset missing'}
-              </span>
+              <span className="panel-badge">{getUploadBadgeLabel(uploadMode)}</span>
             </div>
 
             <div className="source-grid">
@@ -308,11 +402,13 @@ function App() {
                 </div>
                 <div className="source-actions">
                   <UploadWidget
+                    key={`source-${uploadMode}`}
+                    uploadMode={uploadMode}
                     onUploadSuccess={handleSourceUploadSuccess}
                     onUploadError={handleUploadError}
                     buttonText="Upload source video"
                     resourceType="video"
-                    clientAllowedFormats={['mp4', 'mov', 'm4v', 'webm']}
+                    clientAllowedFormats={VIDEO_UPLOAD_FORMATS}
                   />
                   <button
                     className="button button--ghost"
@@ -351,11 +447,13 @@ function App() {
                 </div>
                 <div className="source-actions">
                   <UploadWidget
+                    key={`gameplay-${uploadMode}`}
+                    uploadMode={uploadMode}
                     onUploadSuccess={handleGameplayUploadSuccess}
                     onUploadError={handleUploadError}
                     buttonText="Upload gameplay bed"
                     resourceType="video"
-                    clientAllowedFormats={['mp4', 'mov', 'm4v', 'webm']}
+                    clientAllowedFormats={VIDEO_UPLOAD_FORMATS}
                   />
                   <button
                     className="button button--ghost"
@@ -544,11 +642,7 @@ function App() {
             <ul className="readiness-list">
               <li>
                 <strong>Cloudinary widget</strong>
-                <span>
-                  {hasUploadPreset
-                    ? 'Unsigned uploads are live.'
-                    : 'Add VITE_CLOUDINARY_UPLOAD_PRESET to upload real videos.'}
-                </span>
+                <span>{getUploadReadinessLabel(uploadMode)}</span>
               </li>
               <li>
                 <strong>Cloudinary MCP</strong>

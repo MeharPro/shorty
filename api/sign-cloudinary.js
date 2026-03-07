@@ -8,6 +8,23 @@ function normalizeBody(body) {
   return typeof body === 'string' ? JSON.parse(body || '{}') : body;
 }
 
+function toSnakeCase(key) {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/-/g, '_')
+    .toLowerCase();
+}
+
+function normalizeParamsToSign(paramsToSign) {
+  if (!paramsToSign || typeof paramsToSign !== 'object' || Array.isArray(paramsToSign)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(paramsToSign).map(([key, value]) => [toSnakeCase(key), value])
+  );
+}
+
 export default function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -28,9 +45,12 @@ export default function handler(req, res) {
   }
 
   const body = normalizeBody(req.body);
-  const timestamp = Number(body.timestamp || Math.floor(Date.now() / 1000));
+  const baseParamsToSign = normalizeParamsToSign(body.paramsToSign);
+  const timestamp = Number(
+    baseParamsToSign.timestamp || body.timestamp || Math.floor(Date.now() / 1000)
+  );
   const paramsToSign = {
-    ...body.paramsToSign,
+    ...baseParamsToSign,
     timestamp,
   };
 

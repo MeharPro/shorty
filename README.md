@@ -21,7 +21,7 @@ Current state:
 - The UI is a working short-form video planning and preview tool.
 - It generates Cloudinary delivery URLs for multiple social platforms.
 - It supports sample media mode immediately.
-- It supports real uploads once an unsigned Cloudinary upload preset is configured.
+- It supports real uploads through either an unsigned upload preset or the signed upload route.
 - It supports local browser snapshot saving now.
 - It supports optional Supabase snapshot syncing if env vars are configured.
 - It includes Vercel-compatible API routes for health checks, manifest generation, and signed upload preparation.
@@ -107,7 +107,7 @@ Specific implementation-direction conclusions:
 - Media layer: Cloudinary
 - Hosting/orchestration: Vercel
 - Persistence: local-first, optional Supabase
-- Upload security strategy: unsigned preset for MVP, signed upload route available for later
+- Upload security strategy: unsigned preset first, signed upload route as the hardened fallback
 
 ## 5. What The App Currently Has
 
@@ -189,7 +189,6 @@ The application currently does **not** do the following yet:
 - It does not have analytics.
 - It does not deploy itself automatically.
 - It does not yet integrate with the Reactiv App Clip kit.
-- It does not yet connect the signed upload route into the browser widget.
 - It does not yet run background jobs or queue-based rendering.
 - It does not yet store jobs in Supabase by default.
 - It does not yet turn gameplay stacking into a fully rendered production export.
@@ -199,7 +198,7 @@ The application currently does **not** do the following yet:
 These pieces exist, but are not fully production-wired:
 
 - AI preview URL generation is present, but first-hit derived media generation may still take time on Cloudinary.
-- Signed upload infrastructure exists as an API route, but the current browser flow still assumes the easier MVP path: unsigned preset upload.
+- Signed uploads are wired into the browser widget, but only when `/api/sign-cloudinary` is available.
 - Supabase sync exists in code, but only works if env vars and the included schema are configured.
 - Gameplay support exists as a staged asset in the UI and manifest, not as a true final composite render.
 - The app is deployment-shaped for Vercel, but it has not been pushed live from this repo by default.
@@ -245,7 +244,6 @@ Not implemented:
 
 - Final burned subtitle tracks
 - Composite talking-head + gameplay exports
-- Full signed upload browser flow
 - Cloudinary admin-side asset search or management inside the UI
 
 ### C. Data / Persistence
@@ -302,6 +300,8 @@ npm install
 npm run dev
 ```
 
+To exercise signed uploads locally, run the project through Vercel so `/api/*` routes are available.
+
 ### Build and lint
 
 ```bash
@@ -315,7 +315,7 @@ Without any extra setup:
 
 - The app runs using Cloudinary's `demo` cloud.
 - Sample source media is available.
-- Upload buttons remain disabled because no upload preset is configured.
+- Upload buttons stay in sample mode unless either an unsigned preset is configured or the signed Vercel route is available.
 - You can still test the full UI and export-manifest flow.
 
 ## 11. Environment Variables
@@ -348,11 +348,13 @@ To upload your own files:
 - `VITE_CLOUDINARY_CLOUD_NAME=your_cloud_name`
 - `VITE_CLOUDINARY_UPLOAD_PRESET=your_unsigned_upload_preset`
 
-To use signed uploads later:
+To use signed uploads:
 
 - `CLOUDINARY_CLOUD_NAME`
 - `CLOUDINARY_API_KEY`
 - `CLOUDINARY_API_SECRET`
+
+If `VITE_CLOUDINARY_UPLOAD_PRESET` is blank and the signed route is reachable, the widget will use signed uploads automatically.
 
 To use Supabase sync:
 
@@ -364,24 +366,26 @@ To use Supabase sync:
 Current upload strategy:
 
 - The app uses the Cloudinary Upload Widget directly in the browser.
-- For the MVP, uploads are expected to use an **unsigned upload preset**.
-- This avoids putting API secrets in the browser.
+- The default hackathon path remains an **unsigned upload preset**.
+- When the preset is absent, the widget probes `/api/health` and uses the signed upload route if it is configured.
+- This keeps API secrets on the server while preserving a simple browser flow.
 
 What this means:
 
-- No Cloudinary API key is required in the frontend for basic uploads.
-- You only need a cloud name and unsigned preset to upload from the UI.
+- Plain local `vite` development still relies on the unsigned preset path.
+- Signed uploads work when the Vercel-style API routes are available.
+- Cloudinary API secrets remain server-side.
 
 Why this was chosen:
 
 - It is faster for a hackathon MVP.
 - It keeps the local testing path simple.
-- It avoids server complexity until the core product direction is validated.
+- It adds a safer upload path without forcing the app into a heavier backend.
 
 What exists for later:
 
-- A signed upload helper route already exists in [`api/sign-cloudinary.js`](/Users/meharkhanna/yt-shortmaker/api/sign-cloudinary.js)
-- That route is intended for a later hardening pass
+- Hardening the signed path with auth and ownership rules
+- Wiring the same pattern into richer asset management flows
 
 ## 13. Vercel Position
 
@@ -517,7 +521,7 @@ Project docs/config:
 - Gameplay support is product-level and manifest-level today, not a fully rendered composite export.
 - Caption styling is modeled in the UI, not baked into final media yet.
 - Supabase sync is optional and currently minimal.
-- Signed uploads exist server-side but are not yet wired to the browser widget flow.
+- Signed uploads depend on `/api/sign-cloudinary`, so plain Vite dev without Vercel routes still falls back to unsigned uploads or sample mode.
 
 ## 19. What Was Brainstormed But Not Yet Built
 
@@ -538,7 +542,7 @@ Highest-value next moves:
 
 1. Connect a real Cloudinary cloud and unsigned upload preset.
 2. Verify real uploads end-to-end in the browser.
-3. Wire the signed upload route into the upload flow if needed.
+3. Validate the signed upload route under `vercel dev` or a Vercel preview deployment.
 4. Decide whether the next milestone is:
    - auto-captioning
    - real compositing
