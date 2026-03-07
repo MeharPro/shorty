@@ -252,11 +252,31 @@
 .recipe {
   display: block;
   overflow: auto;
+  word-break: break-word;
   padding: 10px 12px;
   border-radius: 14px;
   background: rgba(0, 0, 0, 0.24);
   color: #f2efe6;
   font-size: 0.82rem;
+}
+
+.remote-gameplay {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.remote-gameplay .button {
+  width: fit-content;
+}
+
+.remote-gameplay-hint {
+  margin: 0;
+  color: rgba(242, 239, 230, 0.6);
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 .preset-grid {

@@ -1,5 +1,5 @@
 import { startTransition, useDeferredValue, useEffect, useState } from 'react';
-import { cloudName, uploadPreset } from './cloudinary/config';
+import { cloudName, isDemoCloud, uploadPreset } from './cloudinary/config';
 import { UploadWidget } from './cloudinary/UploadWidget';
 import type { CloudinaryUploadResult } from './cloudinary/UploadWidget';
 import {
@@ -15,6 +15,7 @@ import {
   buildPlayableSourceUrl,
   buildPreviewManifest,
   createMediaAssetFromUpload,
+  createRemoteMediaAsset,
 } from './lib/rendering';
 import {
   hasSupabaseBrowserConfig,
@@ -67,6 +68,7 @@ function App() {
   const [statusMessage, setStatusMessage] = useState('');
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [remoteGameplayUrl, setRemoteGameplayUrl] = useState('');
 
   const deferredDraft = useDeferredValue(draft);
   const hasUploadPreset = Boolean(uploadPreset);
@@ -146,11 +148,32 @@ function App() {
       ...current,
       includeGameplay: true,
     }));
-    setStatusMessage('Gameplay bed uploaded and queued.');
+    setStatusMessage('Gameplay bed uploaded and compositing is live.');
   };
 
   const handleUploadError = (error: Error) => {
     setStatusMessage(error.message);
+  };
+
+  const attachGameplayFeed = (url: string, label = 'Remote Gameplay Feed') => {
+    setGameplayAsset(createRemoteMediaAsset(url, label));
+    setRemoteGameplayUrl(url);
+    setDraft((current) => ({
+      ...current,
+      includeGameplay: true,
+    }));
+  };
+
+  const attachRemoteGameplay = () => {
+    const url = remoteGameplayUrl.trim();
+
+    if (!/^https?:\/\//i.test(url)) {
+      setStatusMessage('Paste a direct http(s) gameplay video URL.');
+      return;
+    }
+
+    attachGameplayFeed(url);
+    setStatusMessage('Remote gameplay feed attached for live lower-half compositing.');
   };
 
   const applyStoryPreset = (preset: StoryPreset) => {
@@ -210,12 +233,14 @@ function App() {
           <h1>yt-shortmaker</h1>
           <p className="hero-body">
             Turn a regular upload into Shorts, Reels, and TikToks with Cloudinary trim windows,
-            vertical crops, caption packs, and a ready path to gameplay stacking.
+            vertical crops, caption packs, and live gameplay composites when a second feed is
+            attached.
           </p>
           <div className="hero-actions">
             <button
               className="button"
               type="button"
+              data-testid="copy-manifest-button"
               onClick={() => void copyText('manifest', manifestJson)}
             >
               {copiedToken === 'manifest' ? 'Manifest copied' : 'Copy manifest JSON'}
@@ -224,6 +249,7 @@ function App() {
               className="button button--ghost"
               type="button"
               disabled={!manifests.length || isSaving}
+              data-testid="save-snapshot-button"
               onClick={() => void saveSnapshot()}
             >
               {isSaving ? 'Saving…' : 'Save export snapshot'}
@@ -231,7 +257,13 @@ function App() {
           </div>
           <div className="hero-chips">
             <span className="chip">Cloud: {cloudName}</span>
-            <span className="chip">{hasUploadPreset ? 'Uploads enabled' : 'Sample media mode'}</span>
+            <span className="chip">
+              {isDemoCloud
+                ? 'Demo cloud active'
+                : hasUploadPreset
+                  ? 'Upload preset configured'
+                  : 'Cloud configured'}
+            </span>
             <span className="chip">
               {hasSupabaseBrowserConfig ? 'Supabase ready' : 'Supabase optional'}
             </span>
@@ -276,7 +308,7 @@ function App() {
                 </p>
               </div>
               <span className="panel-badge">
-                {hasUploadPreset ? 'Unsigned widget ready' : 'Preset missing'}
+                {hasUploadPreset && !isDemoCloud ? 'Unsigned widget ready' : 'Sample-cloud mode'}
               </span>
             </div>
 
@@ -340,11 +372,11 @@ function App() {
                     <strong>{gameplayAsset.label}</strong>
                     <span>
                       {draft.includeGameplay
-                        ? 'Queued for lower-half or split-screen use'
-                        : 'Available if you want a gameplay layer'}
+                        ? 'Live lower-half composite rendering enabled'
+                        : 'Attach a gameplay layer for a stacked render'}
                     </span>
                   </div>
-                  <code>{gameplayAsset.publicId}</code>
+                  <code>{gameplayAsset.publicId || gameplayAsset.secureUrl}</code>
                   <span>
                     {formatDuration(gameplayAsset.duration)} • {formatBytes(gameplayAsset.bytes)}
                   </span>
@@ -363,6 +395,30 @@ function App() {
                     onClick={() => setGameplayAsset(SAMPLE_GAMEPLAY_ASSET)}
                   >
                     Use sample
+                  </button>
+                </div>
+                <div className="remote-gameplay">
+                  <label className="field field--full">
+                    <span>Remote gameplay URL</span>
+                    <input
+                      data-testid="gameplay-remote-input"
+                      value={remoteGameplayUrl}
+                      onChange={(event) => setRemoteGameplayUrl(event.target.value)}
+                      placeholder="https://example.com/gameplay.mp4"
+                    />
+                  </label>
+                  <p className="remote-gameplay-hint">
+                    Paste a direct MP4/WebM URL here. If you only have a page URL, use the
+                    {' '}
+                    <code>npm run resolve:gameplay -- &lt;url&gt;</code> helper first.
+                  </p>
+                  <button
+                    className="button button--ghost"
+                    type="button"
+                    data-testid="attach-remote-gameplay-button"
+                    onClick={attachRemoteGameplay}
+                  >
+                    Attach remote gameplay
                   </button>
                 </div>
               </article>
@@ -384,6 +440,7 @@ function App() {
                 <button
                   key={preset.id}
                   type="button"
+                  data-testid={`preset-${preset.id}`}
                   className={`preset-card ${
                     draft.storyPresetId === preset.id ? 'preset-card--active' : ''
                   }`}
@@ -506,9 +563,9 @@ function App() {
                   onChange={(event) => updateDraft('includeGameplay', event.target.checked)}
                 />
                 <span>
-                  <strong>Stage gameplay underlay</strong>
+                  <strong>Enable gameplay composite</strong>
                   <small>
-                    Keep a second video queued for split-screen or underlay composition.
+                    Render a second video into the lower half of each Cloudinary delivery URL.
                   </small>
                 </span>
               </label>
@@ -521,6 +578,7 @@ function App() {
                   <button
                     key={platform.id}
                     type="button"
+                    data-testid={`platform-${platform.id}`}
                     className={`platform-pill ${active ? 'platform-pill--active' : ''}`}
                     onClick={() => togglePlatform(platform.id)}
                   >
@@ -592,7 +650,12 @@ function App() {
 
             <div className="preview-grid">
               {manifests.map((manifest) => (
-                <article className="preview-card" key={manifest.id}>
+                <article
+                  className="preview-card"
+                  key={manifest.id}
+                  data-testid="preview-card"
+                  data-composition-mode={manifest.compositionMode}
+                >
                   <div className="phone-frame">
                     <img
                       className="phone-poster"
@@ -619,7 +682,9 @@ function App() {
                     </div>
                     {draft.includeGameplay ? (
                       <div className="gameplay-banner">
-                        Gameplay layer queued: {manifest.gameplayLabel ?? 'Upload or keep sample'}
+                        {manifest.compositionMode === 'gameplay-stack'
+                          ? `Gameplay composite live: ${manifest.gameplayLabel ?? 'Upload or keep sample'}`
+                          : `Gameplay layer queued: ${manifest.gameplayLabel ?? 'Upload or keep sample'}`}
                       </div>
                     ) : null}
                     <div className="cta-chip">{draft.ctaLabel}</div>

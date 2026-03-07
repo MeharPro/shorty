@@ -7,8 +7,9 @@ export interface MediaAsset {
   label: string;
   publicId: string;
   secureUrl: string;
-  source: 'sample' | 'upload';
+  source: 'sample' | 'upload' | 'remote';
   resourceType: 'video';
+  strategy?: 'cloudinary-public-id' | 'remote-fetch';
   duration?: number;
   width?: number;
   height?: number;
@@ -76,6 +77,7 @@ export interface RenderManifest {
   captionLines: string[];
   sourceLabel: string;
   gameplayLabel: string | null;
+  compositionMode: 'single' | 'gameplay-stack';
 }
 
 export interface SavedExport {

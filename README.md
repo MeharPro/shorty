@@ -20,11 +20,14 @@ Current state:
 - The app is scaffolded from Cloudinary's React starter.
 - The UI is a working short-form video planning and preview tool.
 - It generates Cloudinary delivery URLs for multiple social platforms.
+- It now generates true gameplay-stacked Cloudinary delivery URLs when a gameplay asset is enabled.
 - It supports sample media mode immediately.
 - It supports real uploads once an unsigned Cloudinary upload preset is configured.
+- It supports direct remote gameplay feed URLs for lower-half compositing.
+- It includes a gameplay URL resolver for extracting direct video URLs from public pages.
 - It supports local browser snapshot saving now.
 - It supports optional Supabase snapshot syncing if env vars are configured.
-- It includes Vercel-compatible API routes for health checks, manifest generation, and signed upload preparation.
+- It includes Vercel-compatible API routes for health checks, manifest generation, gameplay URL resolution, and signed upload preparation.
 
 Current maturity:
 
@@ -36,6 +39,7 @@ Verification completed:
 
 - `npm run build` passes
 - `npm run lint` passes
+- `npm run test:smoke` passes
 
 ## 2. Why This Exists
 
@@ -119,6 +123,8 @@ Specific implementation-direction conclusions:
 - Editable hook headline, CTA, caption seed, duration, and start offset
 - Platform-specific selection for Shorts / Reels / TikTok
 - Preview cards for each selected platform
+- Live gameplay composite delivery URLs for the Gameplay Stack flow
+- Direct remote gameplay feed attachment via MP4/WebM URL
 - Export manifest generation
 - Local snapshot saving
 - Optional Supabase sync for snapshot data
@@ -147,6 +153,7 @@ Specific implementation-direction conclusions:
 - Cloudinary Upload Widget
 - Cloudinary URL generation
 - Cloudinary `trim()` video editing
+- Cloudinary video overlays for lower-half gameplay compositing
 - Cloudinary `preview()` URL generation
 - Cloudinary smart crop / gravity for vertical outputs
 - Cloudinary auto format / auto quality delivery
@@ -162,6 +169,7 @@ Specific implementation-direction conclusions:
 
 - `/api/health`
 - `/api/render-manifest`
+- `/api/resolve-gameplay`
 - `/api/sign-cloudinary`
 
 ### Developer-experience features
@@ -170,6 +178,8 @@ Specific implementation-direction conclusions:
 - `.env.example`
 - Supabase schema file
 - README instructions
+- Local gameplay URL resolver script
+- Browser smoke test script
 - Build and lint clean
 
 ## 6. What The App Does Not Have Yet
@@ -180,7 +190,6 @@ The application currently does **not** do the following yet:
 
 - It does not auto-transcribe uploaded videos.
 - It does not auto-burn real captions into final Cloudinary video outputs.
-- It does not perform true split-screen or underlay compositing of source video plus gameplay in the final delivery URL.
 - It does not score clips from transcripts using an LLM or other AI ranking service.
 - It does not automatically find the "best moment" in a video beyond the generated preview URL strategy.
 - It does not provide real timeline editing.
@@ -192,7 +201,8 @@ The application currently does **not** do the following yet:
 - It does not yet connect the signed upload route into the browser widget.
 - It does not yet run background jobs or queue-based rendering.
 - It does not yet store jobs in Supabase by default.
-- It does not yet turn gameplay stacking into a fully rendered production export.
+- It does not yet scrape or ingest protected social-platform videos directly; the current resolver only works for direct video URLs and public pages that expose embeddable video sources.
+- It does not yet preview remote gameplay composites as posters in the UI; remote gameplay still uses a fast source-first poster fallback while the final delivery URL keeps the gameplay overlay.
 
 ## 7. What Exists As Scaffold Or Partial Work
 
@@ -201,7 +211,8 @@ These pieces exist, but are not fully production-wired:
 - AI preview URL generation is present, but first-hit derived media generation may still take time on Cloudinary.
 - Signed upload infrastructure exists as an API route, but the current browser flow still assumes the easier MVP path: unsigned preset upload.
 - Supabase sync exists in code, but only works if env vars and the included schema are configured.
-- Gameplay support exists as a staged asset in the UI and manifest, not as a true final composite render.
+- Gameplay compositing now works in final Cloudinary delivery URLs, but remote-feed posters intentionally fall back to source-only stills to keep the UI fast.
+- Gameplay URL resolution exists as both a script and Vercel route, but it is intentionally limited to direct video URLs and public HTML extraction.
 - The app is deployment-shaped for Vercel, but it has not been pushed live from this repo by default.
 
 ## 8. Detailed Feature Inventory
@@ -218,6 +229,8 @@ Implemented:
 - Start offset range control
 - Duration selector
 - Preview cards for every selected platform
+- Gameplay composite status and live delivery URL generation
+- Direct remote gameplay feed attachment
 - Copy manifest button
 - Save snapshot button
 - Sample mode for both main source and gameplay bed
@@ -239,14 +252,16 @@ Implemented:
 - Cloudinary-based source playback URLs
 - Cloudinary-based poster URLs
 - Cloudinary-based platform delivery URLs
+- Cloudinary-based gameplay composite delivery URLs
+- Cloudinary fetch overlays for direct remote gameplay feeds
 - Cloudinary-based AI preview URLs
 
 Not implemented:
 
 - Final burned subtitle tracks
-- Composite talking-head + gameplay exports
 - Full signed upload browser flow
 - Cloudinary admin-side asset search or management inside the UI
+- Remote composite poster rendering for the UI
 
 ### C. Data / Persistence
 
@@ -269,6 +284,7 @@ Implemented:
 
 - Health route
 - Manifest generation route
+- Gameplay URL resolution route
 - Signed upload signature route
 
 Not implemented:
@@ -287,7 +303,7 @@ The current intended local flow is:
 3. Pick a preset
 4. Set headline, CTA, caption seed, clip length, and start offset
 5. Toggle target platforms
-6. Optionally queue gameplay media
+6. Optionally enable gameplay compositing and use a sample, uploaded, or direct remote gameplay feed
 7. Inspect each platform card
 8. Copy or open the generated Cloudinary delivery URLs
 9. Save a snapshot locally
@@ -309,6 +325,20 @@ npm run build
 npm run lint
 ```
 
+### Run the browser smoke test
+
+```bash
+npm run test:smoke
+```
+
+What it verifies:
+
+- the app boots locally in Vite
+- the Gameplay Stack preset switches preview cards into composite mode
+- a live Cloudinary gameplay composite URL is generated
+- a direct remote gameplay feed can be attached from the UI
+- the gameplay URL resolver can scrape a public page into a direct video URL
+
 ### What happens with no extra configuration
 
 Without any extra setup:
@@ -316,7 +346,7 @@ Without any extra setup:
 - The app runs using Cloudinary's `demo` cloud.
 - Sample source media is available.
 - Upload buttons remain disabled because no upload preset is configured.
-- You can still test the full UI and export-manifest flow.
+- You can still test the full UI, gameplay compositing flow, remote gameplay attach flow, and export-manifest flow.
 
 ## 11. Environment Variables
 

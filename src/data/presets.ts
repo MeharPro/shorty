@@ -116,6 +116,7 @@ export const SAMPLE_PRIMARY_ASSET: MediaAsset = {
   publicId: 'dog',
   secureUrl: 'https://res.cloudinary.com/demo/video/upload/f_auto/q_auto/dog.mp4',
   source: 'sample',
+  strategy: 'cloudinary-public-id',
   resourceType: 'video',
 };
 
@@ -125,5 +126,6 @@ export const SAMPLE_GAMEPLAY_ASSET: MediaAsset = {
   publicId: 'samples/sea-turtle',
   secureUrl: 'https://res.cloudinary.com/demo/video/upload/f_auto/q_auto/samples/sea-turtle.mp4',
   source: 'sample',
+  strategy: 'cloudinary-public-id',
   resourceType: 'video',
 };
