@@ -1,16 +1,15 @@
-import type { MediaAsset, ReelGenerationResponse, VisualAnalysisSummary } from '../types';
-
-export interface EditingOptions {
-  removeSilences?: boolean;
-  shakingCaptions?: boolean;
-  faceFocus?: boolean;
-}
+import type {
+  Feature1EditingAdvice,
+  MediaAsset,
+  ReelGenerationResponse,
+  VisualAnalysisSummary,
+} from '../types';
 
 export interface GenerateReelsInput {
   sourceAsset?: MediaAsset | null;
   googleDriveUrl?: string;
   transcriptText?: string;
-  editingOptions?: EditingOptions;
+  editingOptions?: Feature1EditingAdvice;
   visualAnalysis?: VisualAnalysisSummary | null;
 }
 

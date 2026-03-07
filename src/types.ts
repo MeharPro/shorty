@@ -132,6 +132,35 @@ export interface VisualAnalysisSummary {
   generatedAt: string;
 }
 
+export interface ReelQualityAudit {
+  status: 'pass' | 'warn';
+  samples: number;
+  framesWithFaces: number;
+  speakerFaceVisibleRatio: number;
+  notes: string[];
+}
+
+export interface Feature1EditingAdvice {
+  removeSilences?: boolean;
+  shakingCaptions?: boolean;
+  faceFocus?: boolean;
+  safeFaceFrame?: boolean;
+  qaEnabled?: boolean;
+  focusPreference?: 'auto' | 'speaker' | 'reaction' | 'group';
+  cameraMotionPreference?: 'auto' | 'steady' | 'dynamic' | 'shake';
+  captionDensity?: 'tight' | 'balanced';
+  viralStyle?: 'balanced' | 'aggressive';
+}
+
+export interface Feature1AgentPlan {
+  model: string;
+  summary: string;
+  editingOptions: Feature1EditingAdvice;
+  logicBlocks: string[];
+  qaChecks: string[];
+  notes: string[];
+}
+
 export interface ReelCandidate {
   id: string;
   rank: number;
@@ -155,6 +184,7 @@ export interface ReelCandidate {
   posterUrl: string;
   downloadUrl: string;
   aiPreviewUrl: string | null;
+  qa?: ReelQualityAudit | null;
 }
 
 export interface TranscriptWord {

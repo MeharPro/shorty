@@ -19,7 +19,9 @@ import {
   type UploadHistoryItem,
 } from '../lib/persistence';
 import { buildCaptionCues } from '../lib/captions';
+import { planFeature1Pipeline } from '../lib/feature1Agent';
 import { generateReels } from '../lib/reels';
+import { auditGeneratedClips, chooseRecommendedClip } from '../lib/reelQualityAudit';
 import { analyzeVideoExpressions } from '../lib/visualAnalysis';
 import {
   fetchReelHistory,
@@ -31,6 +33,8 @@ import { transcribeVideo } from '../lib/transcription';
 import type { ShortySession } from '../lib/session';
 import type {
   MediaAsset,
+  Feature1AgentPlan,
+  Feature1EditingAdvice,
   ReelGenerationResponse,
   ReelHistoryEntry,
   VideoTranscriptionResponse,
@@ -199,6 +203,100 @@ function createInitialLogicBlocks(): LogicBlock[] {
   ];
 }
 
+const AGENT_BLOCK_ATTACHMENTS: Record<LogicBlockType, CoreNodeId> = {
+  'hook-filter': 'generate',
+  'caption-pass': 'results',
+  'viral-score': 'generate',
+  voiceover: 'generate',
+  'brand-safety': 'results',
+  'export-split': 'results',
+};
+
+const AGENT_WISH_DEFAULT =
+  'Keep the active speaker face fully visible, tighten captions so they never overflow, and favor viral hooks with controlled motion.';
+const AGENT_CANVAS_SUMMARY_DEFAULT =
+  'Agent changes can add or update flow blocks, then focus the edited stage in the canvas.';
+
+interface AgentFlowchartUpdate {
+  blocks: LogicBlock[];
+  touchedBlockIds: string[];
+  focusedStage: CoreNodeId | null;
+  addedCount: number;
+  updatedCount: number;
+}
+
+function getAgentBlockCoordinates(blocks: LogicBlock[], attachTo: CoreNodeId, excludeId?: string) {
+  const siblings = blocks.filter(
+    (block) => block.attachTo === attachTo && (!excludeId || block.id !== excludeId)
+  ).length;
+
+  return {
+    x: attachTo === 'generate' ? 760 + siblings * 48 : 1080 + siblings * 48,
+    y: 300 + siblings * 70,
+  };
+}
+
+function applyAgentLogicBlocks(current: LogicBlock[], requestedTypes: string[]): AgentFlowchartUpdate {
+  const next = [...current];
+  const touchedBlockIds: string[] = [];
+  let focusedStage: CoreNodeId | null = null;
+  let addedCount = 0;
+  let updatedCount = 0;
+
+  for (const rawType of requestedTypes) {
+    const type = rawType as LogicBlockType;
+    const template = LOGIC_BLOCK_LIBRARY.find((item) => item.type === type);
+    if (!template) {
+      continue;
+    }
+
+    const attachTo = AGENT_BLOCK_ATTACHMENTS[type];
+    const existingIndex = next.findIndex((block) => block.type === type);
+    focusedStage = attachTo;
+
+    if (existingIndex >= 0) {
+      const existing = next[existingIndex];
+      const nextPosition =
+        existing.attachTo === attachTo
+          ? { x: existing.x, y: existing.y }
+          : getAgentBlockCoordinates(next, attachTo, existing.id);
+
+      next[existingIndex] = {
+        ...existing,
+        ...template,
+        attachTo,
+        x: nextPosition.x,
+        y: nextPosition.y,
+        note: 'Updated by the local pipeline agent from your latest prompt.',
+      };
+      touchedBlockIds.push(existing.id);
+      updatedCount += 1;
+      continue;
+    }
+
+    const position = getAgentBlockCoordinates(next, attachTo);
+    const id = `logic-${type}-${crypto.randomUUID()}`;
+    next.push({
+      ...template,
+      id,
+      attachTo,
+      x: position.x,
+      y: position.y,
+      note: 'Added by the local pipeline agent.',
+    });
+    touchedBlockIds.push(id);
+    addedCount += 1;
+  }
+
+  return {
+    blocks: next,
+    touchedBlockIds,
+    focusedStage,
+    addedCount,
+    updatedCount,
+  };
+}
+
 function formatScore(value: number): string {
   return `${Math.round(value)}/100`;
 }
@@ -245,10 +343,16 @@ export function Feature1Page({ session }: Feature1PageProps) {
   const [editRemoveSilences, setEditRemoveSilences] = useState(true);
   const [editShakingCaptions, setEditShakingCaptions] = useState(true);
   const [editFaceFocus, setEditFaceFocus] = useState(true);
+  const [editSafeFaceFrame, setEditSafeFaceFrame] = useState(true);
+  const [agentWish, setAgentWish] = useState(AGENT_WISH_DEFAULT);
+  const [agentPlan, setAgentPlan] = useState<Feature1AgentPlan | null>(null);
+  const [isApplyingAgent, setIsApplyingAgent] = useState(false);
+  const [agentCanvasSummary, setAgentCanvasSummary] = useState(AGENT_CANVAS_SUMMARY_DEFAULT);
 
   const [history, setHistory] = useState<ReelHistoryEntry[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
+  const agentCaptionDensity = agentPlan?.editingOptions.captionDensity ?? 'balanced';
 
   const sourcePreviewUrl = sourceAsset ? buildPlayableSourceUrl(sourceAsset) : null;
   const hasSource = !!sourceAsset;
@@ -398,15 +502,15 @@ export function Feature1Page({ session }: Feature1PageProps) {
         buildCaptionCues(transcriptionDetails.segments ?? [], {
           clipStart: clip.startOffset,
           clipDuration: clip.duration,
-          maxWordsPerCue: editShakingCaptions ? 2 : 4,
-          maxCharsPerCue: editShakingCaptions ? 14 : 24,
-          maxCueDuration: editShakingCaptions ? 1.6 : 2.5,
-          maxLineChars: editShakingCaptions ? 10 : 16,
+          maxWordsPerCue: agentCaptionDensity === 'tight' ? 2 : editShakingCaptions ? 2 : 4,
+          maxCharsPerCue: agentCaptionDensity === 'tight' ? 12 : editShakingCaptions ? 14 : 24,
+          maxCueDuration: agentCaptionDensity === 'tight' ? 1.4 : editShakingCaptions ? 1.6 : 2.5,
+          maxLineChars: agentCaptionDensity === 'tight' ? 9 : editShakingCaptions ? 10 : 16,
           maxLinesPerCue: 2,
         }),
       ])
     );
-  }, [editShakingCaptions, result, transcriptionDetails]);
+  }, [agentCaptionDensity, editShakingCaptions, result, transcriptionDetails]);
 
   const startPan = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -587,6 +691,80 @@ export function Feature1Page({ session }: Feature1PageProps) {
     }
   };
 
+  const currentEditingOptions: Feature1EditingAdvice = {
+    ...(agentPlan?.editingOptions ?? {}),
+    removeSilences: editRemoveSilences,
+    shakingCaptions: editShakingCaptions,
+    faceFocus: editFaceFocus,
+    safeFaceFrame: editSafeFaceFrame,
+    qaEnabled: true,
+  };
+
+  const handleApplyAgent = async () => {
+    setIsApplyingAgent(true);
+    setErrorMessage('');
+
+    try {
+      const plan = await planFeature1Pipeline({
+        wish: agentWish,
+        transcriptPreview: transcriptText.trim().slice(0, 1200),
+        currentEditingOptions,
+        activeLogicBlocks: logicBlocks.map((block) => block.type),
+      });
+
+      setAgentPlan(plan);
+      if (typeof plan.editingOptions.removeSilences === 'boolean') {
+        setEditRemoveSilences(plan.editingOptions.removeSilences);
+      }
+      if (typeof plan.editingOptions.shakingCaptions === 'boolean') {
+        setEditShakingCaptions(plan.editingOptions.shakingCaptions);
+      }
+      if (typeof plan.editingOptions.faceFocus === 'boolean') {
+        setEditFaceFocus(plan.editingOptions.faceFocus);
+      }
+      if (typeof plan.editingOptions.safeFaceFrame === 'boolean') {
+        setEditSafeFaceFrame(plan.editingOptions.safeFaceFrame);
+      }
+
+      const flowchartUpdate = applyAgentLogicBlocks(logicBlocks, plan.logicBlocks);
+      setLogicBlocks(flowchartUpdate.blocks);
+      if (flowchartUpdate.touchedBlockIds.length > 0) {
+        setSelectedLogicBlockId(flowchartUpdate.touchedBlockIds[flowchartUpdate.touchedBlockIds.length - 1]);
+      }
+      if (flowchartUpdate.focusedStage) {
+        setActiveCoreNode(
+          flowchartUpdate.focusedStage === 'results' && !result ? 'generate' : flowchartUpdate.focusedStage
+        );
+      }
+
+      if (flowchartUpdate.addedCount || flowchartUpdate.updatedCount) {
+        const summaryParts = [];
+        if (flowchartUpdate.addedCount) {
+          summaryParts.push(`${flowchartUpdate.addedCount} added`);
+        }
+        if (flowchartUpdate.updatedCount) {
+          summaryParts.push(`${flowchartUpdate.updatedCount} updated`);
+        }
+        const totalFlowchartChanges = flowchartUpdate.addedCount + flowchartUpdate.updatedCount;
+        setAgentCanvasSummary(
+          `Flowchart edited: ${summaryParts.join(', ')} block${totalFlowchartChanges === 1 ? '' : 's'}.`
+        );
+      } else {
+        setAgentCanvasSummary('Agent updated reel settings without changing any flow blocks.');
+      }
+
+      setStatusMessage(
+        flowchartUpdate.addedCount || flowchartUpdate.updatedCount
+          ? `Local agent updated Feature 1 using ${plan.model} and edited the flowchart.`
+          : `Local agent updated Feature 1 using ${plan.model}.`
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to apply local AI changes.');
+    } finally {
+      setIsApplyingAgent(false);
+    }
+  };
+
   const handleGenerate = async () => {
     if (!session) {
       return;
@@ -631,19 +809,25 @@ export function Feature1Page({ session }: Feature1PageProps) {
         googleDriveUrl: '',
         transcriptText: transcriptText.trim(),
         visualAnalysis: resolvedVisualAnalysis,
-        editingOptions: {
-          removeSilences: editRemoveSilences,
-          shakingCaptions: editShakingCaptions,
-          faceFocus: editFaceFocus,
-        },
+        editingOptions: currentEditingOptions,
       });
+
+      const auditedClips =
+        currentEditingOptions.qaEnabled === false
+          ? response.clips
+          : await auditGeneratedClips(response.clips, currentEditingOptions);
+      const auditedResponse: ReelGenerationResponse = {
+        ...response,
+        clips: auditedClips,
+        recommendedClipId: chooseRecommendedClip(auditedClips, response.recommendedClipId),
+      };
 
       const entry: ReelHistoryEntry = {
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
         sourceLabel: sourceAsset?.label || 'Uploaded video',
-        recommendedClipId: response.recommendedClipId,
-        result: response,
+        recommendedClipId: auditedResponse.recommendedClipId,
+        result: auditedResponse,
       };
 
       const nextHistory = [entry, ...history].slice(0, 10);
@@ -653,12 +837,16 @@ export function Feature1Page({ session }: Feature1PageProps) {
         await persistReelHistoryEntry(session.userId, entry);
       }
 
-      setResult(response);
-    setVisualAnalysis(response.visualAnalysis ?? resolvedVisualAnalysis ?? null);
+      setResult(auditedResponse);
+      setVisualAnalysis(auditedResponse.visualAnalysis ?? resolvedVisualAnalysis ?? null);
       // Auto-enable all clips in filter
-      setFilteredClipIds(new Set(response.clips.map((c) => c.id)));
+      setFilteredClipIds(new Set(auditedResponse.clips.map((c) => c.id)));
       setActiveCoreNode('hook-filter');
-      setStatusMessage('Reels generated! Review hooks below.');
+      setStatusMessage(
+        currentEditingOptions.qaEnabled === false
+          ? 'Reels generated! Review hooks below.'
+          : 'Reels generated and QA-checked for speaker framing.'
+      );
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to generate reels.');
     } finally {
@@ -689,6 +877,10 @@ export function Feature1Page({ session }: Feature1PageProps) {
     setResult(null);
     setFilteredClipIds(new Set());
     setVisualAnalysis(null);
+    setEditSafeFaceFrame(true);
+    setAgentPlan(null);
+    setAgentWish(AGENT_WISH_DEFAULT);
+    setAgentCanvasSummary(AGENT_CANVAS_SUMMARY_DEFAULT);
     setErrorMessage('');
     setStatusMessage('');
   };
@@ -719,6 +911,69 @@ export function Feature1Page({ session }: Feature1PageProps) {
           The production actions still live inside the core nodes below.
         </p>
       </div>
+
+      <section className="feature-agent-stage">
+        <div className="agent-panel agent-panel--hero" data-testid="feature1-agent-panel">
+          <div className="agent-panel__hero-copy">
+            <div className="feature-page__kicker">Local pipeline agent</div>
+            <h2>Put the AI in charge of the flowchart</h2>
+            <p>
+              Describe the reel behavior you want. The local agent updates Feature 1 settings,
+              edits matching flow blocks on the canvas, and focuses the affected stage.
+            </p>
+            <div className="agent-panel__hero-chips">
+              <span>{logicBlocks.length} flow blocks live</span>
+              <span>Active stage: {coreNodeMap[activeCoreNode].label}</span>
+              <span>
+                Inspector: {selectedLogicBlock ? selectedLogicBlock.label : 'workflow overview'}
+              </span>
+            </div>
+          </div>
+
+          <div className="agent-panel__hero-controls">
+            <div className="agent-panel__header">
+              <div>
+                <h3>Flowchart editor</h3>
+                <p>Runs on Ollama locally and rewires the canvas before you generate.</p>
+              </div>
+              <span className="agent-panel__badge">{agentPlan?.model || 'Local model'}</span>
+            </div>
+            <textarea
+              className="agent-panel__input"
+              data-testid="feature1-agent-wish"
+              rows={4}
+              value={agentWish}
+              onChange={(event) => setAgentWish(event.target.value)}
+              placeholder="Example: keep the active speaker fully visible, tighten captions, and rework the flowchart for stronger hook scoring."
+            />
+            <div className="agent-panel__actions">
+              <button
+                className="btn btn--ghost btn--sm"
+                type="button"
+                onClick={() => void handleApplyAgent()}
+                disabled={isApplyingAgent}
+                data-testid="feature1-agent-apply"
+              >
+                {isApplyingAgent ? 'Planning…' : 'Apply Local AI Changes'}
+              </button>
+              <span>{agentPlan ? agentPlan.summary : agentCanvasSummary}</span>
+            </div>
+            <div className="agent-panel__flow-summary">
+              <span>{agentCanvasSummary}</span>
+              {agentPlan?.logicBlocks?.length ? (
+                <span>Flow edits requested: {agentPlan.logicBlocks.join(', ')}</span>
+              ) : null}
+            </div>
+            {agentPlan?.notes?.length ? (
+              <ul className="agent-panel__notes">
+                {agentPlan.notes.map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        </div>
+      </section>
 
       <section className="flow-workspace flow-workspace--opal">
         <aside className="flow-library">
@@ -934,7 +1189,11 @@ export function Feature1Page({ session }: Feature1PageProps) {
       </section>
 
       {errorMessage && <div className="wizard-error">{errorMessage}</div>}
-      {statusMessage && !errorMessage && <div className="inline-banner">{statusMessage}</div>}
+      {statusMessage && !errorMessage && (
+        <div className="inline-banner" data-testid="feature1-status-banner">
+          {statusMessage}
+        </div>
+      )}
 
       <section className="flow-panel-layout">
         <div className="flow-panel flow-panel--opal">
@@ -983,6 +1242,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                           type="button"
                           className={`recent-uploads__card ${sourceAsset?.publicId === item.publicId ? 'recent-uploads__card--active' : ''}`}
                           onClick={() => handleSelectFromHistory(item)}
+                          data-testid="recent-upload-card"
                         >
                           {item.thumbnailUrl ? (
                             <img src={item.thumbnailUrl} alt={item.label} className="recent-uploads__thumb" />
@@ -1009,6 +1269,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                   type="button"
                   onClick={() => setActiveCoreNode('transcribe')}
                   disabled={!hasSource}
+                  data-testid="feature1-next-transcribe"
                 >
                   Next: Transcribe →
                 </button>
@@ -1086,6 +1347,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                   <label className="form-field">
                     <span>Transcript</span>
                     <textarea
+                      data-testid="feature1-transcript"
                       rows={8}
                       value={transcriptText}
                       onChange={(event) => {
@@ -1122,7 +1384,12 @@ export function Feature1Page({ session }: Feature1PageProps) {
                     <button className="btn btn--ghost" type="button" onClick={() => setActiveCoreNode('generate')}>
                       Skip
                     </button>
-                    <button className="btn btn--primary" type="button" onClick={() => setActiveCoreNode('generate')}>
+                    <button
+                      className="btn btn--primary"
+                      type="button"
+                      onClick={() => setActiveCoreNode('generate')}
+                      data-testid="feature1-next-generate"
+                    >
                       Next: Generate →
                     </button>
                   </div>
@@ -1205,6 +1472,18 @@ export function Feature1Page({ session }: Feature1PageProps) {
                           <span className="editing-block__slider" />
                         </div>
                       </label>
+
+                      <label className={`editing-block ${editSafeFaceFrame ? 'editing-block--on' : ''}`}>
+                        <div className="editing-block__icon">🧍</div>
+                        <div className="editing-block__info">
+                          <strong>Safe Face Frame</strong>
+                          <span>Pad the final 9:16 render so the speaker’s full face stays visible</span>
+                        </div>
+                        <div className="editing-block__toggle">
+                          <input type="checkbox" checked={editSafeFaceFrame} onChange={(e) => setEditSafeFaceFrame(e.target.checked)} />
+                          <span className="editing-block__slider" />
+                        </div>
+                      </label>
                     </div>
                   </div>
 
@@ -1236,6 +1515,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                         type="button"
                         onClick={() => void handleGenerate()}
                         disabled={isGenerating || !hasSource}
+                        data-testid="feature1-generate"
                       >
                         ⚡ Generate Reels
                       </button>
@@ -1379,6 +1659,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                     type="button"
                     onClick={() => setActiveCoreNode('results')}
                     disabled={filteredClipIds.size === 0}
+                    data-testid="feature1-view-results"
                   >
                     View Results ({filteredClipIds.size}) →
                   </button>
@@ -1408,6 +1689,11 @@ export function Feature1Page({ session }: Feature1PageProps) {
                     <span className="reel-results__pill">
                       Visual: {result.visualSignalsUsed ? 'MediaPipe' : 'off'}
                     </span>
+                    {result.clips.some((clip) => clip.qa) ? (
+                      <span className="reel-results__pill">
+                        QA: {result.clips.filter((clip) => clip.qa?.status === 'pass').length}/{result.clips.length} pass
+                      </span>
+                    ) : null}
                     {result.visualAnalysis?.highlights?.length ? (
                       <span className="reel-results__pill">
                         Expressions: {result.visualAnalysis.highlights.length} peaks
@@ -1429,6 +1715,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                           <article
                             className={`reel-card-v2 ${isTop ? 'reel-card-v2--top' : ''}`}
                             key={clip.id}
+                            data-testid="feature1-reel-card"
                           >
                             <div className="reel-card-v2__phone">
                               {recommended && <span className="reel-card-v2__badge">⭐ Best</span>}
@@ -1487,6 +1774,19 @@ export function Feature1Page({ session }: Feature1PageProps) {
                                   </span>
                                   {clip.cameraMotion ? <em>{clip.cameraMotion}</em> : null}
                                   {clip.expressionScore ? <strong>{formatScore(clip.expressionScore)}</strong> : null}
+                                </div>
+                              ) : null}
+
+                              {clip.qa ? (
+                                <div
+                                  className={`reel-card-v2__qa reel-card-v2__qa--${clip.qa.status}`}
+                                  data-testid="feature1-reel-qa"
+                                >
+                                  <span>
+                                    {clip.qa.status === 'pass' ? 'QA passed' : 'QA review'}
+                                    {` · face ${Math.round(clip.qa.speakerFaceVisibleRatio * 100)}%`}
+                                  </span>
+                                  <small>{clip.qa.notes[0]}</small>
                                 </div>
                               ) : null}
 

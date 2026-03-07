@@ -1,7 +1,7 @@
 import { Cloudinary } from '@cloudinary/url-gen';
 import { format, quality } from '@cloudinary/url-gen/actions/delivery';
 import { source } from '@cloudinary/url-gen/actions/overlay';
-import { fill } from '@cloudinary/url-gen/actions/resize';
+import { fill, pad } from '@cloudinary/url-gen/actions/resize';
 import { trim } from '@cloudinary/url-gen/actions/videoEdit';
 import { auto as autoFormat } from '@cloudinary/url-gen/qualifiers/format';
 import { autoGravity, compass } from '@cloudinary/url-gen/qualifiers/gravity';
@@ -29,14 +29,15 @@ function getAdaptiveFontSize(textValue, { base, floor }) {
   return Math.max(floor, Math.round(base - overage * 1.05));
 }
 
-function buildRemoteUrl({ cloudName, remoteUrl, startOffset, duration, format = 'mp4' }) {
+function buildRemoteUrl({ cloudName, remoteUrl, startOffset, duration, format = 'mp4', safeFaceFrame = true }) {
   const transform = [
     `so_${startOffset}`,
     `du_${duration}`,
-    'c_fill,g_auto,w_1080,h_1920',
+    safeFaceFrame ? 'c_pad,w_1080,h_1920' : 'c_fill,g_auto,w_1080,h_1920',
+    safeFaceFrame ? 'b_black' : null,
     'f_auto',
     'q_auto',
-  ].join(',');
+  ].filter(Boolean).join(',');
 
   const extension = format === 'jpg' ? '.jpg' : '.mp4';
   return `https://res.cloudinary.com/${cloudName}/video/fetch/${transform}/${encodeURIComponent(remoteUrl)}${extension}`;
@@ -55,6 +56,7 @@ function buildRemotePreviewUrl({ cloudName, remoteUrl, startOffset, duration }) 
 
 function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLines, poster = false, editingOptions = {} }) {
   const { shakingCaptions = false } = editingOptions;
+  const safeFaceFrame = editingOptions.safeFaceFrame !== false;
   const hookFontSize = getAdaptiveFontSize(hook, {
     base: shakingCaptions ? 72 : 58,
     floor: shakingCaptions ? 42 : 38,
@@ -71,7 +73,15 @@ function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLi
   const render = cld
     .video(publicId)
     .videoEdit(trim().startOffset(startOffset).duration(duration))
-    .resize(fill().width(1080).height(1920).gravity(autoGravity()));
+    .resize(
+      safeFaceFrame
+        ? pad().width(1080).height(1920)
+        : fill().width(1080).height(1920).gravity(autoGravity())
+    );
+
+  if (safeFaceFrame) {
+    render.backgroundColor('black');
+  }
 
   if (hook && shakingCaptions) {
     // Shaking captions: larger, bolder, with background highlight for attention
@@ -175,7 +185,12 @@ export default function handler(req, res) {
       return;
     }
 
-    const plan = buildReelPlan({ transcriptText, sourceDurationSeconds: duration, visualAnalysis });
+    const plan = buildReelPlan({
+      transcriptText,
+      sourceDurationSeconds: duration,
+      visualAnalysis,
+      editingOptions,
+    });
     const clips = plan.clips.map((clip) => {
       const previewUrl = sourceMode === 'cloudinary-public-id' && publicId
         ? buildPublicPreviewClip({
@@ -206,6 +221,7 @@ export default function handler(req, res) {
           remoteUrl,
           startOffset: clip.startOffset,
           duration: clip.duration,
+          safeFaceFrame: editingOptions.safeFaceFrame,
         });
 
       const posterUrl = sourceMode === 'cloudinary-public-id' && publicId
@@ -225,6 +241,7 @@ export default function handler(req, res) {
           startOffset: clip.startOffset,
           duration: clip.duration,
           format: 'jpg',
+          safeFaceFrame: editingOptions.safeFaceFrame,
         });
 
       return {
