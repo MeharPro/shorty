@@ -4,6 +4,7 @@ import { AuthPage } from './pages/AuthPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { Feature1Page } from './pages/Feature1Page';
 import { Feature2Page } from './pages/Feature2Page';
+import { LandingPage } from './pages/LandingPage';
 import {
   clearSession,
   createShortySession,
@@ -85,7 +86,8 @@ function App() {
 
   return (
     <Routes>
-      <Route path="/" element={<DashboardPage session={session} onLogout={handleLogout} />} />
+      <Route path="/" element={<LandingPage />} />
+      <Route path="/app" element={<DashboardPage session={session} onLogout={handleLogout} />} />
       <Route path="/feature1" element={<Feature1Page session={session} />} />
       <Route path="/feature2" element={<Feature2Page session={session} />} />
       <Route path="/login" element={<AuthPage mode="login" onAuth={handleAuth} />} />

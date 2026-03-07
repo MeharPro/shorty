@@ -1,587 +1,274 @@
-# yt-shortmaker
+# Shorty
 
-Cloudinary-first hackathon build for turning longer-form video into vertical social cuts for YouTube Shorts, Instagram Reels, and TikTok.
+Shorty turns long videos into short-form content.
 
-This README is intentionally exhaustive. It captures:
+Current product scope:
+- Feature 1: turn existing videos into ranked reels
+- Feature 2: brain rot AI reels (planned / partial)
+- Base requirements: login, past work, upload, download
 
-- what the application currently does
-- what it does not do yet
-- the product and technical decisions made so far
-- how the sponsor fit was evaluated
-- how to run and test it locally
-- how uploads, Vercel, and Supabase fit into the plan
+## Current status
 
-It does **not** include raw private chain-of-thought. It does include the practical decision log and rationale behind the implementation.
+The current app is a React + Vite frontend with Vercel-style API routes.
 
-## 1. Project Status
+What works now:
+- Email signup / login with Supabase when browser auth env vars are set
+- Local fallback session when Supabase browser config is missing
+- Source video upload through Cloudinary Upload Widget
+- Feature 1 reel generation from:
+  - uploaded Cloudinary source video
+  - Google Drive link
+- Reel ranking with virality scoring
+- Past work history stored locally and optionally synced to Supabase
+- Download links for generated reels
+- Feature 2 route and product placeholder
 
-Current state:
-
-- The app is scaffolded from Cloudinary's React starter.
-- The UI is a working short-form video planning and preview tool.
-- It generates Cloudinary delivery URLs for multiple social platforms.
-- It now generates true gameplay-stacked Cloudinary delivery URLs when a gameplay asset is enabled.
-- It supports sample media mode immediately.
-- It supports real uploads once an unsigned Cloudinary upload preset is configured.
-- It supports direct remote gameplay feed URLs for lower-half compositing.
-- It includes a gameplay URL resolver for extracting direct video URLs from public pages.
-- It supports local browser snapshot saving now.
-- It supports optional Supabase snapshot syncing if env vars are configured.
-- It includes Vercel-compatible API routes for health checks, manifest generation, gameplay URL resolution, and signed upload preparation.
-
-Current maturity:
-
-- This is an MVP / starter, not a production-complete editor.
-- It is optimized for the Cloudinary challenge first.
-- It is not yet a full end-to-end AI shortmaker with automatic captions, transcript scoring, or timeline-grade editing.
-
-Verification completed:
-
-- `npm run build` passes
+Validation status:
 - `npm run lint` passes
-- `npm run test:smoke` passes
-
-## 2. Why This Exists
-
-Original idea:
-
-- Build a "YouTube shortmaker / Instagram reel maker"
-- Turn regular videos into vertical outputs
-- Potentially place gameplay or another motion bed underneath
-- Use Cloudinary strongly enough to compete for the Cloudinary challenge
-- Consider whether the concept could also be adapted toward Reactiv
-
-Hackathon context:
-
-- The main sponsor fit here is **Cloudinary**
-- The product direction is a media-heavy web experience
-- The build should feel production-ready enough to demo clearly
-
-High-level product thesis:
-
-- One source video should fan out into multiple social-ready outputs
-- The app should make that transformation legible and fast
-- Cloudinary should do the media-heavy work
-- Vercel should orchestrate and host, not act as a video rendering farm
-- Supabase should be optional and limited to app state, not raw media
-
-## 3. Sponsor Fit Summary
-
-### Cloudinary
-
-This project is a strong Cloudinary fit because the current app is built around:
-
-- Cloudinary starter tooling
-- Cloudinary upload widget
-- Cloudinary URL generation
-- Cloudinary crop/trim/delivery recipes
-- Cloudinary poster generation from video
-- Cloudinary preview URL generation
-
-The app demonstrates how one source asset can become multiple delivery outputs with different vertical presets.
-
-### Reactiv
-
-Important finding from the planning phase:
-
-- A generic web-based shortmaker is **not** a natural Reactiv submission by itself.
-- Reactiv's challenge is App Clip / iPhone / Swift based and lives in a separate starter repo.
-- If Reactiv is pursued later, it should be a **separate companion experience**, not forced into this web app.
-
-Practical conclusion:
-
-- This repo should remain the Cloudinary-first web app.
-- Any Reactiv submission should be built later in the Reactiv Swift starter as a separate repo or separate codebase.
-
-## 4. Research / Planning Findings
-
-The main conclusions reached during planning were:
-
-- Use Cloudinary's official React starter instead of building the stack manually.
-- Keep the frontend TypeScript-first.
-- Keep the deployment target Vercel-friendly.
-- Avoid using Vercel as the place where heavy video rendering happens.
-- Use Supabase only if there is a clear need for persistence, auth, or saved jobs.
-- Do not use Supabase Storage for the actual media; Cloudinary should own media storage and delivery.
-- Treat Reactiv as a second-track opportunity, not something this repo must satisfy today.
-
-Specific implementation-direction conclusions:
-
-- Frontend: React + Vite + TypeScript
-- Media layer: Cloudinary
-- Hosting/orchestration: Vercel
-- Persistence: local-first, optional Supabase
-- Upload security strategy: unsigned preset for MVP, signed upload route available for later
-
-## 5. What The App Currently Has
-
-### Product-level features
-
-- A branded landing/workbench UI for the shortmaker concept
-- Sample source media and sample gameplay media out of the box
-- Story presets for different content directions
-- Editable hook headline, CTA, caption seed, duration, and start offset
-- Platform-specific selection for Shorts / Reels / TikTok
-- Preview cards for each selected platform
-- Live gameplay composite delivery URLs for the Gameplay Stack flow
-- Direct remote gameplay feed attachment via MP4/WebM URL
-- Export manifest generation
-- Local snapshot saving
-- Optional Supabase sync for snapshot data
-
-### Current story presets
-
-- `Clip Commander`
-- `Launch Loop`
-- `Gameplay Stack`
-
-### Current caption themes
-
-- `Impact`
-- `Clean Room`
-- `Night Shift`
-
-### Current platform outputs
-
-- YouTube Shorts
-- Instagram Reels
-- TikTok
-
-### Cloudinary functionality already used
-
-- Cloudinary React starter scaffolding
-- Cloudinary Upload Widget
-- Cloudinary URL generation
-- Cloudinary `trim()` video editing
-- Cloudinary video overlays for lower-half gameplay compositing
-- Cloudinary `preview()` URL generation
-- Cloudinary smart crop / gravity for vertical outputs
-- Cloudinary auto format / auto quality delivery
-- Cloudinary poster extraction from video
-
-### Persistence features
-
-- Draft state saved in local storage
-- Export snapshots saved in local storage
-- Optional remote snapshot sync via Supabase
-
-### Backend / Vercel features
-
-- `/api/health`
-- `/api/render-manifest`
-- `/api/resolve-gameplay`
-- `/api/sign-cloudinary`
-
-### Developer-experience features
-
-- `.mcp.json` generated from the Cloudinary starter
-- `.env.example`
-- Supabase schema file
-- README instructions
-- Local gameplay URL resolver script
-- Browser smoke test script
-- Build and lint clean
-
-## 6. What The App Does Not Have Yet
-
-This is the critical section.
-
-The application currently does **not** do the following yet:
-
-- It does not auto-transcribe uploaded videos.
-- It does not auto-burn real captions into final Cloudinary video outputs.
-- It does not score clips from transcripts using an LLM or other AI ranking service.
-- It does not automatically find the "best moment" in a video beyond the generated preview URL strategy.
-- It does not provide real timeline editing.
-- It does not support user accounts or auth flows.
-- It does not support project sharing between users.
-- It does not have analytics.
-- It does not deploy itself automatically.
-- It does not yet integrate with the Reactiv App Clip kit.
-- It does not yet connect the signed upload route into the browser widget.
-- It does not yet run background jobs or queue-based rendering.
-- It does not yet store jobs in Supabase by default.
-- It does not yet scrape or ingest protected social-platform videos directly; the current resolver only works for direct video URLs and public pages that expose embeddable video sources.
-- It does not yet preview remote gameplay composites as posters in the UI; remote gameplay still uses a fast source-first poster fallback while the final delivery URL keeps the gameplay overlay.
-
-## 7. What Exists As Scaffold Or Partial Work
-
-These pieces exist, but are not fully production-wired:
-
-- AI preview URL generation is present, but first-hit derived media generation may still take time on Cloudinary.
-- Signed upload infrastructure exists as an API route, but the current browser flow still assumes the easier MVP path: unsigned preset upload.
-- Supabase sync exists in code, but only works if env vars and the included schema are configured.
-- Gameplay compositing now works in final Cloudinary delivery URLs, but remote-feed posters intentionally fall back to source-only stills to keep the UI fast.
-- Gameplay URL resolution exists as both a script and Vercel route, but it is intentionally limited to direct video URLs and public HTML extraction.
-- The app is deployment-shaped for Vercel, but it has not been pushed live from this repo by default.
-
-## 8. Detailed Feature Inventory
-
-### A. Frontend
-
-Implemented:
-
-- Hero/workbench interface
-- Story preset selection
-- Platform selection toggles
-- Caption seed input
-- CTA input
-- Start offset range control
-- Duration selector
-- Preview cards for every selected platform
-- Gameplay composite status and live delivery URL generation
-- Direct remote gameplay feed attachment
-- Copy manifest button
-- Save snapshot button
-- Sample mode for both main source and gameplay bed
-
-Not implemented:
-
-- Real timeline editor
-- Multi-scene editing
-- Drag and drop sequencing
-- Visual subtitle editing
-- Asset library
-
-### B. Cloudinary Integration
-
-Implemented:
-
-- Configured Cloudinary URL client
-- Configured upload widget
-- Cloudinary-based source playback URLs
-- Cloudinary-based poster URLs
-- Cloudinary-based platform delivery URLs
-- Cloudinary-based gameplay composite delivery URLs
-- Cloudinary fetch overlays for direct remote gameplay feeds
-- Cloudinary-based AI preview URLs
-
-Not implemented:
-
-- Final burned subtitle tracks
-- Full signed upload browser flow
-- Cloudinary admin-side asset search or management inside the UI
-- Remote composite poster rendering for the UI
-
-### C. Data / Persistence
-
-Implemented:
-
-- Local draft persistence
-- Local export history
-- Optional Supabase snapshot insert
-
-Not implemented:
-
-- Authentication
-- User ownership rules
-- Team collaboration
-- Project loading dashboard
-
-### D. API Layer
-
-Implemented:
-
-- Health route
-- Manifest generation route
-- Gameplay URL resolution route
-- Signed upload signature route
-
-Not implemented:
-
-- Queue orchestration
-- Webhook handling
-- Async render state polling
-- Job cancellation
-
-## 9. Current User Flow
-
-The current intended local flow is:
-
-1. Open the app
-2. Use demo media immediately, or configure uploads
-3. Pick a preset
-4. Set headline, CTA, caption seed, clip length, and start offset
-5. Toggle target platforms
-6. Optionally enable gameplay compositing and use a sample, uploaded, or direct remote gameplay feed
-7. Inspect each platform card
-8. Copy or open the generated Cloudinary delivery URLs
-9. Save a snapshot locally
-10. Optionally sync snapshot data to Supabase
-
-## 10. Local Testing
-
-### Start the app
+- `npm run build` passes
+
+## Product flows
+
+### Dashboard
+Route: [/](src/App.tsx#L57)
+
+The dashboard is intentionally minimal and focused on the required product surface:
+- auth entry / session state
+- source upload
+- Feature 1 access
+- past work visibility through reel history
+- Feature 2 summary
+
+### Feature 1
+Route: [src/pages/Feature1Page.tsx](src/pages/Feature1Page.tsx)
+
+Goal:
+- turn long videos into 30–60 second short-form clips
+- generate as many clips as make sense
+- rank them by virality score
+- let the user review and download results
+
+Inputs:
+- uploaded source video
+- Google Drive link
+- optional transcript text
+- optional auto-transcription through the backend
+
+Outputs:
+- ranked reel batch
+- recommended top clip
+- downloadable reel URLs
+- saved past work entries
+
+### Feature 2
+Route: [src/pages/Feature2Page.tsx](src/pages/Feature2Page.tsx)
+
+Planned scope:
+- Minecraft gameplay base
+- topic selection
+- ElevenLabs voice selection
+- 10–50 generated outputs
+- ranking by brain rot score
+
+This is not fully implemented yet.
+
+## Tech stack
+
+- React 19
+- Vite
+- TypeScript
+- React Router
+- Cloudinary
+- Supabase
+- Vercel serverless-style API routes
+
+Key dependencies are listed in [package.json](package.json).
+
+## Project structure
+
+Main app files:
+- [src/App.tsx](src/App.tsx)
+- [src/pages/DashboardPage.tsx](src/pages/DashboardPage.tsx)
+- [src/pages/AuthPage.tsx](src/pages/AuthPage.tsx)
+- [src/pages/Feature1Page.tsx](src/pages/Feature1Page.tsx)
+- [src/pages/Feature2Page.tsx](src/pages/Feature2Page.tsx)
+
+Feature 1 helpers:
+- [src/components/ReelGeneratorPanel.tsx](src/components/ReelGeneratorPanel.tsx)
+- [src/lib/reels.ts](src/lib/reels.ts)
+- [src/lib/transcription.ts](src/lib/transcription.ts)
+- [lib/reelPipeline.js](lib/reelPipeline.js)
+- [api/generate-reels.js](api/generate-reels.js)
+- [api/transcribe-video.js](api/transcribe-video.js)
+- [lib/transcription.js](lib/transcription.js)
+
+Auth and persistence:
+- [src/lib/supabase.ts](src/lib/supabase.ts)
+- [src/lib/session.ts](src/lib/session.ts)
+- [src/lib/persistence.ts](src/lib/persistence.ts)
+- [supabase/schema.sql](supabase/schema.sql)
+
+Cloudinary:
+- [src/cloudinary/config.ts](src/cloudinary/config.ts)
+- [src/cloudinary/UploadWidget.tsx](src/cloudinary/UploadWidget.tsx)
+
+## Local development
+
+Install dependencies:
 
 ```bash
 npm install
+```
+
+Run frontend only:
+
+```bash
 npm run dev
 ```
 
-### Build and lint
+Run the local startup script:
 
 ```bash
-npm run build
+npm start
+```
+
+What `npm start` does:
+- starts Vite on `127.0.0.1:5173` by default
+- starts Vercel dev on `127.0.0.1:3000` if the Vercel CLI is installed and authenticated
+- skips backend startup cleanly if Vercel CLI is unavailable
+
+Startup script: [start.sh](start.sh)
+
+## Environment variables
+
+See [.env.example](.env.example).
+
+### Minimum useful setup
+
+#### Cloudinary
+Required for real uploads:
+- `VITE_CLOUDINARY_CLOUD_NAME`
+- `VITE_CLOUDINARY_UPLOAD_PRESET`
+
+Required for server-side Cloudinary routes:
+- `CLOUDINARY_CLOUD_NAME`
+- `CLOUDINARY_API_KEY`
+- `CLOUDINARY_API_SECRET`
+
+How to get them:
+1. Open the Cloudinary console.
+2. Copy your cloud name, API key, and API secret.
+3. Create an **unsigned** upload preset under Settings → Upload → Upload presets.
+4. Put that preset name into `VITE_CLOUDINARY_UPLOAD_PRESET`.
+
+#### Supabase
+Required for real login / saved-user history:
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+Optional server-side Supabase config:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+If browser auth works already, these can stay as-is.
+
+#### Transcription
+Optional, but needed for auto-transcription:
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `OPENAI_TRANSCRIPTION_MODEL`
+
+The transcription backend is OpenAI-compatible, so it can point at:
+- OpenAI
+- a local Whisper-compatible server
+- another OpenAI-compatible transcription endpoint
+
+## Local Whisper-compatible transcription
+
+The app expects an OpenAI-compatible transcription API.
+
+That means the easiest local path is:
+- run a local Whisper-compatible server
+- point `OPENAI_BASE_URL` at it
+- set `OPENAI_API_KEY` if the server expects one
+- set `OPENAI_TRANSCRIPTION_MODEL` to the model name that server exposes
+
+Example shape:
+
+```dotenv
+OPENAI_API_KEY=local
+OPENAI_BASE_URL=http://127.0.0.1:8000/v1
+OPENAI_TRANSCRIPTION_MODEL=whisper-1
+```
+
+Notes:
+- exact startup depends on the server you choose
+- this repo does not currently bundle the local Whisper server itself
+- the backend already supports the compatible API pattern
+
+## Database setup
+
+If you want Supabase-backed past work, apply the schema in:
+- [supabase/schema.sql](supabase/schema.sql)
+
+That file includes the reel history table and policies used by the app.
+
+## API routes
+
+Current API routes:
+- [api/health.js](api/health.js)
+- [api/render-manifest.js](api/render-manifest.js)
+- [api/resolve-gameplay.js](api/resolve-gameplay.js)
+- [api/sign-cloudinary.js](api/sign-cloudinary.js)
+- [api/generate-reels.js](api/generate-reels.js)
+- [api/transcribe-video.js](api/transcribe-video.js)
+
+## Testing
+
+Lint:
+
+```bash
 npm run lint
 ```
 
-### Run the browser smoke test
+Build:
+
+```bash
+npm run build
+```
+
+Smoke test:
 
 ```bash
 npm run test:smoke
 ```
 
-What it verifies:
-
-- the app boots locally in Vite
-- the Gameplay Stack preset switches preview cards into composite mode
-- a live Cloudinary gameplay composite URL is generated
-- a direct remote gameplay feed can be attached from the UI
-- the gameplay URL resolver can scrape a public page into a direct video URL
-
-### What happens with no extra configuration
-
-Without any extra setup:
-
-- The app runs using Cloudinary's `demo` cloud.
-- Sample source media is available.
-- Upload buttons remain disabled because no upload preset is configured.
-- You can still test the full UI, gameplay compositing flow, remote gameplay attach flow, and export-manifest flow.
-
-## 11. Environment Variables
-
-Copy [`.env.example`](/Users/meharkhanna/yt-shortmaker/.env.example) to `.env`.
-
-### Client-side env vars
-
-- `VITE_CLOUDINARY_CLOUD_NAME`
-- `VITE_CLOUDINARY_UPLOAD_PRESET`
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
-
-### Server-side env vars
-
-- `CLOUDINARY_CLOUD_NAME`
-- `CLOUDINARY_API_KEY`
-- `CLOUDINARY_API_SECRET`
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-
-### Minimal setup required
-
-To run in sample mode:
-
-- `VITE_CLOUDINARY_CLOUD_NAME=demo`
-
-To upload your own files:
-
-- `VITE_CLOUDINARY_CLOUD_NAME=your_cloud_name`
-- `VITE_CLOUDINARY_UPLOAD_PRESET=your_unsigned_upload_preset`
-
-To use signed uploads later:
-
-- `CLOUDINARY_CLOUD_NAME`
-- `CLOUDINARY_API_KEY`
-- `CLOUDINARY_API_SECRET`
-
-To use Supabase sync:
-
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
-
-## 12. Upload Strategy
-
-Current upload strategy:
-
-- The app uses the Cloudinary Upload Widget directly in the browser.
-- For the MVP, uploads are expected to use an **unsigned upload preset**.
-- This avoids putting API secrets in the browser.
-
-What this means:
-
-- No Cloudinary API key is required in the frontend for basic uploads.
-- You only need a cloud name and unsigned preset to upload from the UI.
-
-Why this was chosen:
-
-- It is faster for a hackathon MVP.
-- It keeps the local testing path simple.
-- It avoids server complexity until the core product direction is validated.
-
-What exists for later:
-
-- A signed upload helper route already exists in [`api/sign-cloudinary.js`](/Users/meharkhanna/yt-shortmaker/api/sign-cloudinary.js)
-- That route is intended for a later hardening pass
-
-## 13. Vercel Position
-
-The implementation assumes Vercel is the correct deployment target for:
-
-- hosting the frontend
-- running small orchestration routes
-- serving manifest generation
-- serving signature endpoints
-
-The implementation explicitly does **not** assume Vercel should do heavy raw video rendering itself.
-
-Reason:
-
-- Cloudinary is the better place for media transformation and delivery
-- Vercel should stay as the thin orchestration layer
-
-Current Vercel-oriented files:
-
-- [`api/health.js`](/Users/meharkhanna/yt-shortmaker/api/health.js)
-- [`api/render-manifest.js`](/Users/meharkhanna/yt-shortmaker/api/render-manifest.js)
-- [`api/sign-cloudinary.js`](/Users/meharkhanna/yt-shortmaker/api/sign-cloudinary.js)
-
-## 14. Supabase Position
-
-Supabase was evaluated as optional infrastructure.
-
-Decision:
-
-- Use Supabase for database and light persistence only
-- Do not use Supabase Storage for media
-- Keep Cloudinary as the media layer
-
-Why:
-
-- Media belongs in Cloudinary
-- Database/state can live in Supabase if needed
-- This separation keeps the architecture clean
-
-Current Supabase scope:
-
-- optional browser-side snapshot insert
-- optional saved job table
-
-Current schema file:
-
-- [`supabase/schema.sql`](/Users/meharkhanna/yt-shortmaker/supabase/schema.sql)
-
-What Supabase does not do yet:
-
-- auth
-- row ownership
-- project dashboard
-- user profiles
-
-## 15. Reactiv Position
-
-Reactiv was considered during brainstorming.
-
-Conclusion:
-
-- This web app should **not** be stretched into the Reactiv submission directly.
-- Reactiv's challenge is App Clip / iPhone / Swift oriented.
-- If Reactiv is pursued, it should be a separate companion codebase that reuses the product idea at the business level, not this repo at the framework level.
-
-Practical translation:
-
-- `yt-shortmaker` = Cloudinary challenge repo
-- Reactiv clip = separate future repo or future parallel app
-
-## 16. Current Architecture
-
-### Frontend
-
-- React 19
-- Vite
-- TypeScript
-- Single-screen workbench UX
-
-### Media layer
-
-- Cloudinary URL generation
-- Cloudinary widget uploads
-- Cloudinary posters
-- Cloudinary delivery URLs
-
-### Persistence layer
-
-- local storage by default
-- Supabase optional
-
-### API layer
-
-- Vercel-style serverless endpoints
-
-## 17. File Map
-
-Core UI:
-
-- [`src/App.tsx`](/Users/meharkhanna/yt-shortmaker/src/App.tsx)
-- [`src/App.css`](/Users/meharkhanna/yt-shortmaker/src/App.css)
-- [`src/index.css`](/Users/meharkhanna/yt-shortmaker/src/index.css)
-
-Cloudinary:
-
-- [`src/cloudinary/config.ts`](/Users/meharkhanna/yt-shortmaker/src/cloudinary/config.ts)
-- [`src/cloudinary/UploadWidget.tsx`](/Users/meharkhanna/yt-shortmaker/src/cloudinary/UploadWidget.tsx)
-- [`src/lib/rendering.ts`](/Users/meharkhanna/yt-shortmaker/src/lib/rendering.ts)
-- [`.mcp.json`](/Users/meharkhanna/yt-shortmaker/.mcp.json)
-
-Data / persistence:
-
-- [`src/lib/persistence.ts`](/Users/meharkhanna/yt-shortmaker/src/lib/persistence.ts)
-- [`src/lib/supabase.ts`](/Users/meharkhanna/yt-shortmaker/src/lib/supabase.ts)
-- [`supabase/schema.sql`](/Users/meharkhanna/yt-shortmaker/supabase/schema.sql)
-
-API routes:
-
-- [`api/health.js`](/Users/meharkhanna/yt-shortmaker/api/health.js)
-- [`api/render-manifest.js`](/Users/meharkhanna/yt-shortmaker/api/render-manifest.js)
-- [`api/sign-cloudinary.js`](/Users/meharkhanna/yt-shortmaker/api/sign-cloudinary.js)
-
-Project docs/config:
-
-- [`.env.example`](/Users/meharkhanna/yt-shortmaker/.env.example)
-- [`package.json`](/Users/meharkhanna/yt-shortmaker/package.json)
-- [`README.md`](/Users/meharkhanna/yt-shortmaker/README.md)
-
-## 18. Known Limitations
-
-- Cloudinary transformed video URLs may need a first-hit generation delay.
-- The preview cards are poster-driven, not full transformed video playback cards.
-- Gameplay support is product-level and manifest-level today, not a fully rendered composite export.
-- Caption styling is modeled in the UI, not baked into final media yet.
-- Supabase sync is optional and currently minimal.
-- Signed uploads exist server-side but are not yet wired to the browser widget flow.
-
-## 19. What Was Brainstormed But Not Yet Built
-
-These were part of the planning conversation and remain future work:
-
-- automatic transcript generation
-- automatic caption burn-in
-- real split-screen export with gameplay underneath
-- long-video-to-highlight AI selection
-- richer social export variants
-- sponsor-specific showcase moments for Cloudinary side quests
-- a later Reactiv companion experience
-- production deployment pipeline
-
-## 20. Recommended Next Steps
-
-Highest-value next moves:
-
-1. Connect a real Cloudinary cloud and unsigned upload preset.
-2. Verify real uploads end-to-end in the browser.
-3. Wire the signed upload route into the upload flow if needed.
-4. Decide whether the next milestone is:
-   - auto-captioning
-   - real compositing
-   - smarter clip selection
-   - Vercel preview deployment
-5. If Reactiv is still desired, start a separate Swift repo instead of bending this repo.
-
-## 21. Short Plain-English Summary
-
-Right now this app is best described as:
-
-> a Cloudinary-powered short-form video planner and export generator with sample/demo mode, real upload capability once configured, platform delivery recipes, manifest export, and optional Supabase snapshot storage
-
-It is **not yet** a full automated AI video editor.
-
-That is deliberate. The current build establishes the correct product direction and sponsor architecture first.
+Optional env vars for auth-aware smoke coverage:
+- `SMOKE_TEST_EMAIL`
+- `SMOKE_TEST_PASSWORD`
+
+## What is not finished yet
+
+- Feature 2 generation pipeline is not complete
+- Real brain rot scoring is not implemented yet
+- ElevenLabs integration is not wired yet
+- The dedicated feature pages are larger / older than the new minimal dashboard shell
+- Full production hardening is still pending
+
+## Security notes
+
+- Do not commit `.env`
+- Keep `CLOUDINARY_API_SECRET` server-only
+- If a secret was exposed during development, rotate it
+- Do not put server secrets into `VITE_` variables
+
+## Summary
+
+Shorty currently ships a real Feature 1 MVP:
+- authenticate users
+- upload a source video
+- generate ranked reels
+- save past work
+- download outputs
+
+Feature 2 is intentionally present as the next build target, not as a completed workflow.

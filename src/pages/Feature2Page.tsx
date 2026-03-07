@@ -15,10 +15,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
         <div className="feature-page">
             {/* Nav */}
             <nav className="feature-page__nav">
-                <Link className="feature-page__back" to="/">
+                <Link className="feature-page__back" to="/app">
                     ← Dashboard
                 </Link>
-                <Link className="dashboard__brand" to="/">
+                <Link className="dashboard__brand" to="/app">
                     <span className="dashboard__brand-mark">
                         <img alt="Shorty" src={boltLogo} />
                     </span>
