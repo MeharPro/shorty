@@ -1,4 +1,6 @@
 import { startTransition, useDeferredValue, useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
+import type { Session } from '@supabase/supabase-js';
 import { cloudName, isDemoCloud, uploadPreset } from './cloudinary/config';
 import { UploadWidget } from './cloudinary/UploadWidget';
 import type { CloudinaryUploadResult } from './cloudinary/UploadWidget';
@@ -18,8 +20,13 @@ import {
   createRemoteMediaAsset,
 } from './lib/rendering';
 import {
+  getCurrentSession,
   hasSupabaseBrowserConfig,
+  onSessionChange,
   persistManifestSnapshot,
+  signInWithEmail,
+  signOutCurrentUser,
+  signUpWithEmail,
 } from './lib/supabase';
 import type {
   CreatorDraft,
@@ -69,6 +76,14 @@ function App() {
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [remoteGameplayUrl, setRemoteGameplayUrl] = useState('');
+  const [session, setSession] = useState<Session | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [signUpEmail, setSignUpEmail] = useState('');
+  const [signUpPassword, setSignUpPassword] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+  const [isLoginSubmitting, setIsLoginSubmitting] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
   const deferredDraft = useDeferredValue(draft);
   const hasUploadPreset = Boolean(uploadPreset);
@@ -109,6 +124,37 @@ function App() {
   useEffect(() => {
     saveDraft(draft);
   }, [draft]);
+
+  useEffect(() => {
+    if (!hasSupabaseBrowserConfig) {
+      setIsAuthReady(true);
+      return;
+    }
+
+    let isMounted = true;
+
+    void getCurrentSession().then((currentSession) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setSession(currentSession);
+      setIsAuthReady(true);
+    });
+
+    const unsubscribe = onSessionChange((nextSession) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setSession(nextSession);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     if (!statusMessage) {
@@ -242,12 +288,165 @@ function App() {
     }
   };
 
+  const submitSignUp = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!signUpEmail.trim() || !signUpPassword.trim()) {
+      setAuthMessage('Email and password are required.');
+      return;
+    }
+
+    setIsAuthSubmitting(true);
+    setAuthMessage('');
+
+    try {
+      const result = await signUpWithEmail(signUpEmail.trim(), signUpPassword);
+
+      if (!result.ok) {
+        setAuthMessage(result.message);
+        return;
+      }
+
+      setAuthMessage('Account created. Check your email to confirm if your project requires verification.');
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  };
+
+  const submitLogin = async () => {
+    if (!signUpEmail.trim() || !signUpPassword.trim()) {
+      setAuthMessage('Email and password are required.');
+      return;
+    }
+
+    setIsLoginSubmitting(true);
+    setAuthMessage('');
+
+    try {
+      const result = await signInWithEmail(signUpEmail.trim(), signUpPassword);
+
+      if (!result.ok) {
+        setAuthMessage(result.message);
+        return;
+      }
+
+      setAuthMessage('Login successful.');
+    } finally {
+      setIsLoginSubmitting(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    setIsSigningOut(true);
+
+    try {
+      const result = await signOutCurrentUser();
+      if (!result.ok) {
+        setStatusMessage(result.message);
+      }
+    } finally {
+      setIsSigningOut(false);
+    }
+  };
+
+  if (!hasSupabaseBrowserConfig) {
+    return (
+      <div className="auth-shell">
+        <section className="auth-card">
+          <span className="eyebrow">Shorty</span>
+          <h1>Supabase setup required</h1>
+          <p className="hero-body">
+            Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> to your
+            local <code>.env</code> file to enable signup.
+          </p>
+        </section>
+      </div>
+    );
+  }
+
+  if (!isAuthReady) {
+    return (
+      <div className="auth-shell">
+        <section className="auth-card">
+          <span className="eyebrow">Shorty</span>
+          <h1>Loading account...</h1>
+        </section>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="auth-shell">
+        <section className="auth-card">
+          <span className="eyebrow">Shorty</span>
+          <h1>Access your account</h1>
+          <p className="hero-body">
+            Sign up or log in to access your workspace and saved exports.
+          </p>
+
+          <form className="auth-form" onSubmit={submitSignUp}>
+            <label className="field field--full">
+              <span>Email</span>
+              <input
+                type="email"
+                value={signUpEmail}
+                onChange={(event) => setSignUpEmail(event.target.value)}
+                autoComplete="email"
+                required
+              />
+            </label>
+
+            <label className="field field--full">
+              <span>Password</span>
+              <input
+                type="password"
+                value={signUpPassword}
+                onChange={(event) => setSignUpPassword(event.target.value)}
+                autoComplete="current-password"
+                minLength={6}
+                required
+              />
+            </label>
+
+            <div className="auth-actions">
+              <button className="button" type="submit" disabled={isAuthSubmitting || isLoginSubmitting}>
+                {isAuthSubmitting ? 'Creating account...' : 'Sign up'}
+              </button>
+              <button
+                className="button button--ghost"
+                type="button"
+                onClick={() => void submitLogin()}
+                disabled={isAuthSubmitting || isLoginSubmitting}
+              >
+                {isLoginSubmitting ? 'Logging in...' : 'Log in'}
+              </button>
+            </div>
+          </form>
+
+          {authMessage ? <p className="auth-message">{authMessage}</p> : null}
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
+      <div className="session-bar">
+        <span>Signed in as {session.user.email ?? 'account'}</span>
+        <button
+          className="button button--ghost"
+          type="button"
+          onClick={() => void handleSignOut()}
+          disabled={isSigningOut}
+        >
+          {isSigningOut ? 'Signing out...' : 'Sign out'}
+        </button>
+      </div>
       <header className="hero">
         <div className="hero-copy">
           <span className="eyebrow">AI Video Repurposing Studio</span>
-          <h1>yt-shortmaker</h1>
+          <h1>Shorty</h1>
           <p className="hero-body">
             Turn one source video into ready-to-post Shorts, Reels, and TikToks with vertical
             crops, caption-ready layouts, and optional gameplay stacking.
