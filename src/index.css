@@ -4,11 +4,11 @@
   font-family: 'IBM Plex Sans', sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #111111;
+  color: #202638;
   background:
-    radial-gradient(circle at top right, rgba(255, 57, 44, 0.06), transparent 22%),
-    radial-gradient(circle at 15% 0%, rgba(255, 149, 0, 0.05), transparent 18%),
-    linear-gradient(180deg, #ffffff 0%, #fffaf9 56%, #ffffff 100%);
+    radial-gradient(circle at top left, rgba(255, 122, 69, 0.18), transparent 22%),
+    radial-gradient(circle at 85% 8%, rgba(255, 61, 46, 0.1), transparent 20%),
+    linear-gradient(180deg, #f6f1ec 0%, #f1ebe5 48%, #f5f0eb 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -17,8 +17,18 @@
   --surface: #ffffff;
   --text-strong: #111111;
   --text-soft: rgba(17, 17, 17, 0.72);
-  --brand-red: #ff392c;
-  --brand-orange: #ff9900;
+  --brand-red: #ff4932;
+  --brand-orange: #ff8a3d;
+  --dashboard-bg: #f4efea;
+  --dashboard-sidebar: #efebe7;
+  --dashboard-surface: rgba(255, 255, 255, 0.92);
+  --dashboard-surface-soft: #f8f4f1;
+  --dashboard-border: rgba(126, 135, 156, 0.16);
+  --dashboard-shadow: 0 24px 48px rgba(52, 41, 31, 0.08);
+  --dashboard-text: #202638;
+  --dashboard-muted: #7e879c;
+  --dashboard-success: #1aa66c;
+  --dashboard-danger: #d65d5d;
 }
 
 * {
@@ -33,8 +43,8 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  color: var(--text-strong);
-  background: inherit;
+  color: var(--dashboard-text);
+  background: var(--dashboard-bg);
 }
 
 body::before {
@@ -42,13 +52,20 @@ body::before {
   position: fixed;
   inset: 0;
   background:
-    linear-gradient(120deg, rgba(255, 255, 255, 0.4), transparent 34%),
-    radial-gradient(circle at 80% 18%, rgba(255, 57, 44, 0.03), transparent 20%);
+    linear-gradient(120deg, rgba(255, 255, 255, 0.38), transparent 38%),
+    radial-gradient(circle at 80% 18%, rgba(255, 122, 69, 0.08), transparent 22%);
   pointer-events: none;
 }
 
 a {
   color: inherit;
+}
+
+img,
+svg,
+video {
+  display: block;
+  max-width: 100%;
 }
 
 button,

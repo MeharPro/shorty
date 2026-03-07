@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AuthPage } from './pages/AuthPage';
 import { DashboardPage } from './pages/DashboardPage';
-import { HomePage } from './pages/HomePage';
 import {
   clearSession,
   createShortySession,
@@ -82,13 +81,10 @@ function App() {
 
   return (
     <Routes>
-      <Route path="/" element={<HomePage session={session} />} />
+      <Route path="/" element={<DashboardPage session={session} onLogout={handleLogout} />} />
+      <Route path="/dashboard" element={<Navigate replace to="/" />} />
       <Route path="/login" element={<AuthPage mode="login" onAuth={handleAuth} />} />
       <Route path="/signup" element={<AuthPage mode="signup" onAuth={handleAuth} />} />
-      <Route
-        path="/dashboard"
-        element={<DashboardPage session={session} onLogout={handleLogout} />}
-      />
       <Route path="*" element={<Navigate replace to="/" />} />
     </Routes>
   );
