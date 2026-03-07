@@ -398,9 +398,11 @@ export function Feature1Page({ session }: Feature1PageProps) {
         buildCaptionCues(transcriptionDetails.segments ?? [], {
           clipStart: clip.startOffset,
           clipDuration: clip.duration,
-          maxWordsPerCue: editShakingCaptions ? 3 : 5,
-          maxCharsPerCue: editShakingCaptions ? 18 : 28,
-          maxCueDuration: editShakingCaptions ? 2.1 : 3,
+          maxWordsPerCue: editShakingCaptions ? 2 : 4,
+          maxCharsPerCue: editShakingCaptions ? 14 : 24,
+          maxCueDuration: editShakingCaptions ? 1.6 : 2.5,
+          maxLineChars: editShakingCaptions ? 10 : 16,
+          maxLinesPerCue: 2,
         }),
       ])
     );
@@ -1196,7 +1198,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                         <div className="editing-block__icon">🎯</div>
                         <div className="editing-block__info">
                           <strong>Face Focus</strong>
-                          <span>Auto-crop to keep the speaker centered</span>
+                          <span>Track the active speaker instead of locking on the center face</span>
                         </div>
                         <div className="editing-block__toggle">
                           <input type="checkbox" checked={editFaceFocus} onChange={(e) => setEditFaceFocus(e.target.checked)} />
@@ -1329,6 +1331,12 @@ export function Feature1Page({ session }: Feature1PageProps) {
                               {hookScore >= 70 && <span className="hook-fire">🔥</span>}
                             </div>
                             <p className="hook-filter__hook-text">"{clip.hook}"</p>
+                              {clip.expressionLabel ? (
+                                <div className="reel-card-v2__expression reel-card-v2__expression--compact">
+                                  <span>🎯 {clip.focusStrategy || 'speaker'} · {clip.expressionLabel}</span>
+                                  {clip.cameraMotion ? <strong>{clip.cameraMotion}</strong> : null}
+                                </div>
+                              ) : null}
                             <div className="hook-filter__meter">
                               <div className="hook-filter__meter-label">
                                 <span>Hook Strength</span>
@@ -1426,12 +1434,14 @@ export function Feature1Page({ session }: Feature1PageProps) {
                               {recommended && <span className="reel-card-v2__badge">⭐ Best</span>}
                               {isTop && <span className="reel-card-v2__fire">🔥</span>}
                               <FaceDetectVideo
-                                src={clip.deliveryUrl}
+                                src={clip.previewUrl || clip.aiPreviewUrl || clip.deliveryUrl}
                                 poster={clip.posterUrl}
                                 faceFocusEnabled={editFaceFocus}
                                 captions={clipCaptionMap.get(clip.id) || []}
                                 captionsEnabled={Boolean(clipCaptionMap.get(clip.id)?.length)}
                                 captionVariant={editShakingCaptions ? 'shaking' : 'clean'}
+                                focusStrategy={clip.focusStrategy}
+                                cameraMotion={clip.cameraMotion}
                               />
                             </div>
 
@@ -1471,7 +1481,11 @@ export function Feature1Page({ session }: Feature1PageProps) {
 
                               {clip.expressionLabel ? (
                                 <div className="reel-card-v2__expression">
-                                  <span>😀 {clip.expressionLabel}</span>
+                                  <span>
+                                    😀 {clip.expressionLabel}
+                                    {clip.focusStrategy ? ` · ${clip.focusStrategy}` : ''}
+                                  </span>
+                                  {clip.cameraMotion ? <em>{clip.cameraMotion}</em> : null}
                                   {clip.expressionScore ? <strong>{formatScore(clip.expressionScore)}</strong> : null}
                                 </div>
                               ) : null}

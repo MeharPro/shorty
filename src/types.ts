@@ -109,11 +109,14 @@ export interface VisualHighlight {
   label: string;
   dominantExpression: 'smile' | 'surprise' | 'emphasis' | 'engagement';
   faceCount: number;
+  focusStrategy?: 'speaker' | 'reaction' | 'group';
+  cameraMotion?: 'steady' | 'dynamic' | 'shake';
   metrics: {
     smile: number;
     surprise: number;
     emphasis: number;
     engagement: number;
+    groupEnergy?: number;
   };
 }
 
@@ -145,6 +148,9 @@ export interface ReelCandidate {
   analysisSource: 'transcript' | 'visual' | 'hybrid';
   expressionLabel?: string;
   expressionScore?: number;
+  focusStrategy?: 'speaker' | 'reaction' | 'group';
+  cameraMotion?: 'steady' | 'dynamic' | 'shake';
+  previewUrl: string;
   deliveryUrl: string;
   posterUrl: string;
   downloadUrl: string;

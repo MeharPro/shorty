@@ -7,6 +7,29 @@ interface BuildCaptionCuesOptions {
   maxCharsPerCue?: number;
   maxCueDuration?: number;
   longPauseThreshold?: number;
+  maxLineChars?: number;
+  maxLinesPerCue?: number;
+}
+
+export function splitCaptionWordsIntoRows(words: string[], maxLineChars: number): string[] {
+  const rows: string[] = [];
+  let current = '';
+
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length > maxLineChars && current) {
+      rows.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+
+  if (current) {
+    rows.push(current);
+  }
+
+  return rows;
 }
 
 function normalizeWord(word: TranscriptWord): TranscriptWord | null {
@@ -43,6 +66,13 @@ function buildCueFromWords(words: TranscriptWord[], cueIndex: number, clipStart:
   };
 }
 
+function estimateLineCount(words: TranscriptWord[], maxLineChars: number): number {
+  return splitCaptionWordsIntoRows(
+    words.map((word) => word.word),
+    maxLineChars
+  ).length;
+}
+
 export function buildCaptionCues(
   segments: TranscriptSegment[],
   {
@@ -52,6 +82,8 @@ export function buildCaptionCues(
     maxCharsPerCue = 28,
     maxCueDuration = 2.8,
     longPauseThreshold = 0.55,
+    maxLineChars = 16,
+    maxLinesPerCue = 2,
   }: BuildCaptionCuesOptions
 ): CaptionCue[] {
   const clipEnd = clipStart + clipDuration;
@@ -93,13 +125,15 @@ export function buildCaptionCues(
     const candidateText = candidateWords.map((item) => item.word).join(' ');
     const candidateDuration = candidateWords[candidateWords.length - 1].end - candidateWords[0].start;
     const pauseBefore = prevWord ? word.start - prevWord.end : 0;
+    const candidateLineCount = estimateLineCount(candidateWords, maxLineChars);
 
     const shouldBreak =
       currentWords.length > 0 && (
         candidateWords.length > maxWordsPerCue ||
         candidateText.length > maxCharsPerCue ||
         candidateDuration > maxCueDuration ||
-        pauseBefore > longPauseThreshold
+        pauseBefore > longPauseThreshold ||
+        candidateLineCount > maxLinesPerCue
       );
 
     if (shouldBreak) {
