@@ -1,4 +1,4 @@
-import shortyBolt from '../assets/shorty-bolt.svg';
+import boltLogo from '../assets/bolt-logo.png';
 import { UploadWidget } from '../cloudinary/UploadWidget';
 import type { CloudinaryUploadResult } from '../cloudinary/UploadWidget';
 import type {
@@ -35,7 +35,7 @@ export function ShortyHero({
         <div className="shorty-brandbar">
           <div className="shorty-brand">
             <div className="shorty-brand__logo-wrap">
-              <img className="shorty-brand__logo" src={shortyBolt} alt="Shorty logo" />
+              <img className="shorty-brand__logo" src={boltLogo} alt="Shorty logo" />
             </div>
             <div className="shorty-brand__meta">
               <span>Shorty / creator studio</span>
@@ -92,7 +92,7 @@ export function ShortyHero({
             </p>
           </div>
           <div className="shorty-hero-visual__mark">
-            <img className="shorty-hero-visual__logo" src={shortyBolt} alt="Shorty mark" />
+            <img className="shorty-hero-visual__logo" src={boltLogo} alt="Shorty mark" />
           </div>
         </article>
 

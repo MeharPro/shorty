@@ -136,12 +136,14 @@
 .shorty-brand__logo,
 .shorty-hero-visual__logo {
   display: block;
+  object-fit: cover;
+  object-position: 58% 44%;
   animation: shortyPulseGlow 3.8s ease-in-out infinite;
 }
 
 .shorty-brand__logo {
-  width: 56px;
-  height: 56px;
+  width: 124px;
+  height: 124px;
 }
 
 .shorty-brand__meta {
@@ -385,8 +387,8 @@
 }
 
 .shorty-hero-visual__logo {
-  width: 138px;
-  height: 138px;
+  width: 270px;
+  height: 270px;
 }
 
 .shorty-stage-grid {
@@ -1067,8 +1069,8 @@
   }
 
   .shorty-hero-visual__logo {
-    width: 106px;
-    height: 106px;
+    width: 220px;
+    height: 220px;
   }
 
   .shorty-form-grid {
