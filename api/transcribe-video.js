@@ -12,6 +12,7 @@ export default async function handler(req, res) {
     const result = await transcribeRemoteMedia({
       sourceAsset: body.sourceAsset ?? null,
       googleDriveUrl: body.googleDriveUrl || '',
+      publicId: body.publicId || '',
       language: body.language || '',
     });
 
@@ -19,7 +20,9 @@ export default async function handler(req, res) {
       transcript: result.transcript,
       provider: result.provider,
       model: result.model,
+      publicId: result.publicId,
       sourceUrl: result.sourceUrl,
+      transcriptUrl: result.transcriptUrl,
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {

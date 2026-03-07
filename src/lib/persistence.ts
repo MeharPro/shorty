@@ -76,3 +76,62 @@ export function saveReelHistory(userId: string, history: ReelHistoryEntry[]): vo
 
   window.localStorage.setItem(reelHistoryKey(userId), JSON.stringify(history.slice(0, 10)));
 }
+
+const UPLOAD_HISTORY_KEY = 'shorty:uploads:v1';
+
+export interface UploadHistoryItem {
+  id: string;
+  publicId: string;
+  secureUrl: string;
+  label: string;
+  duration?: number;
+  thumbnailUrl?: string;
+  uploadedAt: string;
+}
+
+export function loadUploadHistory(): UploadHistoryItem[] {
+  if (!canUseStorage()) {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(UPLOAD_HISTORY_KEY);
+    return raw ? (JSON.parse(raw) as UploadHistoryItem[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveUploadHistory(history: UploadHistoryItem[]): void {
+  if (!canUseStorage()) {
+    return;
+  }
+
+  window.localStorage.setItem(UPLOAD_HISTORY_KEY, JSON.stringify(history.slice(0, 10)));
+}
+
+const TRANSCRIPT_KEY_PREFIX = 'shorty:transcript:';
+
+export function loadTranscript(publicId: string): string {
+  if (!canUseStorage() || !publicId) {
+    return '';
+  }
+
+  try {
+    return window.localStorage.getItem(TRANSCRIPT_KEY_PREFIX + publicId) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function saveTranscript(publicId: string, text: string): void {
+  if (!canUseStorage() || !publicId) {
+    return;
+  }
+
+  if (text.trim()) {
+    window.localStorage.setItem(TRANSCRIPT_KEY_PREFIX + publicId, text);
+  } else {
+    window.localStorage.removeItem(TRANSCRIPT_KEY_PREFIX + publicId);
+  }
+}

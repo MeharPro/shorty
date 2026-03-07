@@ -147,6 +147,8 @@ export interface VideoTranscriptionResponse {
   transcript: string;
   provider: string;
   model: string;
+  publicId?: string;
   sourceUrl: string;
+  transcriptUrl?: string;
   generatedAt: string;
 }
