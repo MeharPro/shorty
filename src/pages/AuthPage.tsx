@@ -58,98 +58,76 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
   };
 
   return (
-    <div className="purity-auth-route">
-      <section className="purity-auth-shell">
-        <Link className="purity-auth-shell__brand" to="/">
-          <span className="purity-sidebar__brand-mark purity-sidebar__brand-mark--centered">
-            <img alt="Shorty logo" src={boltLogo} />
+    <div className="auth-page">
+      <div className="auth-card">
+        <Link className="auth-card__logo" to="/">
+          <span className="auth-card__logo-mark">
+            <img alt="Shorty" src={boltLogo} />
           </span>
-          <span className="purity-auth-shell__brand-copy">
-            <strong>Shorty Dashboard</strong>
-            <span>{isSignup ? 'Create account' : 'Sign in'}</span>
+          <span className="auth-card__logo-text">
+            <strong>Shorty</strong>
+            <span>Short-form content engine</span>
           </span>
         </Link>
 
-        <div className="purity-auth-shell__grid">
-          <section className="purity-auth-panel purity-auth-panel--intro">
-            <span className="purity-section-heading__eyebrow">
-              {isSignup ? 'Sign up' : 'Sign in'}
-            </span>
-            <h1>{isSignup ? 'Create your workspace.' : 'Return to the editor.'}</h1>
-            <p>
-              {hasSupabaseBrowserConfig
-                ? 'Use the account flow to sync sessions and snapshots across devices.'
-                : 'Auth is optional right now, but adding an account keeps the dashboard ready for sync later.'}
-            </p>
+        <h1 className="auth-card__title">
+          {isSignup ? 'Create your account' : 'Welcome back'}
+        </h1>
+        <p className="auth-card__subtitle">
+          {isSignup
+            ? 'Start turning long videos into viral shorts'
+            : 'Sign in to access your workspace'}
+        </p>
 
-            <ul className="purity-auth-points">
-              <li>Keep dashboard access in one focused route</li>
-              <li>Attach a named identity to snapshots</li>
-              <li>Drop straight back into the tool after submit</li>
-            </ul>
-          </section>
+        <form className="auth-form" onSubmit={handleSubmit}>
+          {isSignup ? (
+            <label className="auth-field">
+              <span>Name</span>
+              <input
+                placeholder="Your name"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </label>
+          ) : null}
 
-          <section className="purity-auth-panel">
-            <form className="purity-auth-form" onSubmit={handleSubmit}>
-              <div className="purity-auth-form__header">
-                <strong>{isSignup ? 'Create account' : 'Sign in'}</strong>
-                <span>
-                  {hasSupabaseBrowserConfig
-                    ? 'Uses Supabase when env vars are configured.'
-                    : 'Falls back to a local workspace identity.'}
-                </span>
-              </div>
+          <label className="auth-field">
+            <span>Email</span>
+            <input
+              placeholder="you@example.com"
+              required
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </label>
 
-              {isSignup ? (
-                <label className="purity-field">
-                  <span>Name</span>
-                  <input
-                    placeholder="Your workspace name"
-                    required
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                  />
-                </label>
-              ) : null}
+          <label className="auth-field">
+            <span>Password</span>
+            <input
+              placeholder="Enter your password"
+              required
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </label>
 
-              <label className="purity-field">
-                <span>Email</span>
-                <input
-                  placeholder="creator@shorty.app"
-                  required
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                />
-              </label>
+          <button className="auth-submit" disabled={isSubmitting} type="submit">
+            {isSubmitting ? 'Working...' : isSignup ? 'Create account' : 'Sign in'}
+          </button>
 
-              <label className="purity-field">
-                <span>Password</span>
-                <input
-                  placeholder="Enter your password"
-                  required
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                />
-              </label>
+          {authMessage ? <p className="auth-error">{authMessage}</p> : null}
 
-              <button className="purity-button purity-button--primary" disabled={isSubmitting} type="submit">
-                {isSubmitting ? 'Working...' : isSignup ? 'Create account' : 'Sign in'}
-              </button>
-
-              {authMessage ? <p className="purity-auth-form__message">{authMessage}</p> : null}
-
-              <p className="purity-auth-form__switch">
-                {isSignup ? 'Already have an account?' : 'Need an account?'}{' '}
-                <Link to={isSignup ? '/login' : '/signup'}>
-                  {isSignup ? 'Sign in' : 'Create one'}
-                </Link>
-              </p>
-            </form>
-          </section>
-        </div>
-      </section>
+          <p className="auth-switch">
+            {isSignup ? 'Already have an account?' : 'Need an account?'}{' '}
+            <Link to={isSignup ? '/login' : '/signup'}>
+              {isSignup ? 'Sign in' : 'Create one'}
+            </Link>
+          </p>
+        </form>
+      </div>
     </div>
   );
 }

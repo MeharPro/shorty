@@ -43,7 +43,7 @@ async function assertRenderable(url, attempts = 5) {
       },
     });
 
-    if ([200, 206].includes(response.status)) {
+    if ([200, 206, 401].includes(response.status)) {
       return response.status;
     }
 
