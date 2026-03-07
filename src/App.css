@@ -410,6 +410,12 @@
   color: rgba(17, 17, 17, 0.62);
 }
 
+.shorty-auth-form__message {
+  margin: 0;
+  color: #90281a;
+  line-height: 1.5;
+}
+
 .shorty-auth-form__switch {
   margin: 0;
 }

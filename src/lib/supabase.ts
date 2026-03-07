@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import type { Session } from '@supabase/supabase-js';
 import type { SavedExport } from '../types';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -14,6 +15,111 @@ export const supabase = hasSupabaseBrowserConfig
       },
     })
   : null;
+
+export async function getCurrentSession(): Promise<Session | null> {
+  if (!supabase) {
+    return null;
+  }
+
+  const {
+    data: { session },
+    error,
+  } = await supabase.auth.getSession();
+
+  if (error) {
+    return null;
+  }
+
+  return session;
+}
+
+export function onSessionChange(callback: (session: Session | null) => void): () => void {
+  if (!supabase) {
+    return () => {};
+  }
+
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange((_event, session) => {
+    callback(session);
+  });
+
+  return () => {
+    subscription.unsubscribe();
+  };
+}
+
+export async function signUpWithEmail(
+  email: string,
+  password: string
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (!supabase) {
+    return {
+      ok: false,
+      message: 'Supabase browser env vars are not configured.',
+    };
+  }
+
+  const { error } = await supabase.auth.signUp({
+    email,
+    password,
+  });
+
+  if (error) {
+    return {
+      ok: false,
+      message: error.message,
+    };
+  }
+
+  return { ok: true };
+}
+
+export async function signInWithEmail(
+  email: string,
+  password: string
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (!supabase) {
+    return {
+      ok: false,
+      message: 'Supabase browser env vars are not configured.',
+    };
+  }
+
+  const { error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (error) {
+    return {
+      ok: false,
+      message: error.message,
+    };
+  }
+
+  return { ok: true };
+}
+
+export async function signOutCurrentUser(): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (!supabase) {
+    return {
+      ok: false,
+      message: 'Supabase browser env vars are not configured.',
+    };
+  }
+
+  const { error } = await supabase.auth.signOut();
+
+  if (error) {
+    return {
+      ok: false,
+      message: error.message,
+    };
+  }
+
+  return { ok: true };
+}
 
 export async function persistManifestSnapshot(
   entry: SavedExport

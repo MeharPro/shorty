@@ -5,6 +5,16 @@ export interface ShortySession {
 
 const SESSION_KEY = 'shorty.session';
 
+export function createShortySession(email: string, preferredName?: string): ShortySession {
+  const trimmedEmail = email.trim();
+  const fallbackName = trimmedEmail.split('@')[0] || 'Creator';
+
+  return {
+    name: preferredName?.trim() || fallbackName,
+    email: trimmedEmail,
+  };
+}
+
 export function loadSession(): ShortySession | null {
   if (typeof window === 'undefined') {
     return null;
