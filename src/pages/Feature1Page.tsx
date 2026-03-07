@@ -5,9 +5,9 @@ import {
   UploadWidget,
   type CloudinaryUploadResult,
 } from '../cloudinary/UploadWidget';
-import { SAMPLE_PRIMARY_ASSET } from '../data/presets';
+
 import { buildPlayableSourceUrl, createMediaAssetFromUpload } from '../lib/rendering';
-import { loadReelHistory, saveReelHistory } from '../lib/persistence';
+import { loadReelHistory, saveReelHistory, loadUploadHistory, saveUploadHistory, loadTranscript, saveTranscript, type UploadHistoryItem } from '../lib/persistence';
 import { generateReels } from '../lib/reels';
 import {
   fetchReelHistory,
@@ -16,7 +16,12 @@ import {
 } from '../lib/supabase';
 import { transcribeVideo } from '../lib/transcription';
 import type { ShortySession } from '../lib/session';
-import type { MediaAsset, ReelGenerationResponse, ReelHistoryEntry } from '../types';
+import type {
+  MediaAsset,
+  ReelGenerationResponse,
+  ReelHistoryEntry,
+  VideoTranscriptionResponse,
+} from '../types';
 
 interface Feature1PageProps {
   session: ShortySession | null;
@@ -170,11 +175,6 @@ function createInitialLogicBlocks(): LogicBlock[] {
   ];
 }
 
-function extractDriveFileId(url: string): string | null {
-  const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-  return match ? match[1] : null;
-}
-
 function formatScore(value: number): string {
   return `${Math.round(value)}/100`;
 }
@@ -203,11 +203,12 @@ export function Feature1Page({ session }: Feature1PageProps) {
   const [viewportOffset, setViewportOffset] = useState(DEFAULT_VIEWPORT_OFFSET);
   const [dragState, setDragState] = useState<DragState>(null);
 
-  const [sourceMode, setSourceMode] = useState<'upload' | 'drive'>('upload');
   const [sourceAsset, setSourceAsset] = useState<MediaAsset | null>(null);
-  const [googleDriveUrl, setGoogleDriveUrl] = useState('');
 
   const [transcriptText, setTranscriptText] = useState('');
+  const [transcriptionPublicId, setTranscriptionPublicId] = useState('');
+  const [transcriptionLanguage, setTranscriptionLanguage] = useState('');
+  const [transcriptionDetails, setTranscriptionDetails] = useState<VideoTranscriptionResponse | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
 
   const [isGenerating, setIsGenerating] = useState(false);
@@ -218,7 +219,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
   const [statusMessage, setStatusMessage] = useState('');
 
   const sourcePreviewUrl = sourceAsset ? buildPlayableSourceUrl(sourceAsset) : null;
-  const hasSource = sourceMode === 'upload' ? !!sourceAsset : !!googleDriveUrl.trim();
+  const hasSource = !!sourceAsset;
 
   const getNodeStatus = useCallback(
     (id: CoreNodeId): NodeStatus => {
@@ -435,30 +436,78 @@ export function Feature1Page({ session }: Feature1PageProps) {
     setStatusMessage('Flow viewport recentered.');
   };
 
+  const [uploadHistory, setUploadHistory] = useState<UploadHistoryItem[]>(() => loadUploadHistory());
+
   const handleSourceUploadSuccess = (uploadResult: CloudinaryUploadResult) => {
-    setSourceAsset(createMediaAssetFromUpload(uploadResult, 'Uploaded Source Video'));
+    const asset = createMediaAssetFromUpload(uploadResult, uploadResult.original_filename || 'Uploaded Video');
+    setSourceAsset(asset);
+    setTranscriptionPublicId((current) => current || uploadResult.public_id);
     setStatusMessage('Video uploaded!');
+
+    // Save to upload history
+    const historyItem: UploadHistoryItem = {
+      id: asset.id,
+      publicId: uploadResult.public_id,
+      secureUrl: uploadResult.secure_url,
+      label: uploadResult.original_filename || 'Uploaded Video',
+      duration: uploadResult.duration,
+      thumbnailUrl: uploadResult.secure_url?.replace('/video/upload/', '/video/upload/w_240,h_135,c_fill,so_0/').replace(/\.[^.]+$/, '.jpg'),
+      uploadedAt: new Date().toISOString(),
+    };
+    const next = [historyItem, ...uploadHistory.filter(h => h.publicId !== uploadResult.public_id)].slice(0, 10);
+    setUploadHistory(next);
+    saveUploadHistory(next);
+  };
+
+  const handleSelectFromHistory = (item: UploadHistoryItem) => {
+    const asset: MediaAsset = {
+      id: item.id,
+      label: item.label,
+      publicId: item.publicId,
+      secureUrl: item.secureUrl,
+      source: 'upload',
+      resourceType: 'video',
+      strategy: 'cloudinary-public-id',
+      duration: item.duration,
+    };
+    setSourceAsset(asset);
+    setTranscriptionPublicId((current) => current || item.publicId);
+    // Load any saved transcript for this video
+    const saved = loadTranscript(item.publicId);
+    if (saved) {
+      setTranscriptText(saved);
+      setStatusMessage(`Loaded "${item.label}" with saved transcript.`);
+    } else {
+      setStatusMessage(`Loaded "${item.label}" from recent uploads.`);
+    }
   };
 
   const handleSourceUploadError = (error: Error) => {
     setErrorMessage(error.message || 'Upload failed.');
   };
 
-  const handleUseSample = () => {
-    setSourceAsset(SAMPLE_PRIMARY_ASSET);
-    setStatusMessage('Sample video loaded.');
-  };
+
 
   const handleTranscribe = async () => {
+    const publicId = transcriptionPublicId.trim();
+    if (!publicId) {
+      setErrorMessage('Enter a Cloudinary public ID to run transcription.');
+      return;
+    }
+
     setIsTranscribing(true);
     setErrorMessage('');
     try {
       const response = await transcribeVideo({
-        sourceAsset: sourceMode === 'upload' ? sourceAsset : null,
-        googleDriveUrl: sourceMode === 'drive' ? googleDriveUrl.trim() : '',
+        sourceAsset: null,
+        googleDriveUrl: '',
+        publicId,
+        language: transcriptionLanguage.trim() || undefined,
       });
       setTranscriptText(response.transcript);
-      setStatusMessage('Transcription complete!');
+      setTranscriptionDetails(response);
+      saveTranscript(publicId, response.transcript);
+      setStatusMessage(`Cloudinary transcript loaded for ${response.publicId || publicId}.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to transcribe.');
     } finally {
@@ -475,18 +524,15 @@ export function Feature1Page({ session }: Feature1PageProps) {
     setErrorMessage('');
     try {
       const response = await generateReels({
-        sourceAsset: sourceMode === 'upload' ? sourceAsset : null,
-        googleDriveUrl: sourceMode === 'drive' ? googleDriveUrl.trim() : '',
+        sourceAsset,
+        googleDriveUrl: '',
         transcriptText: transcriptText.trim(),
       });
 
       const entry: ReelHistoryEntry = {
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
-        sourceLabel:
-          sourceMode === 'upload'
-            ? sourceAsset?.label || 'Uploaded video'
-            : googleDriveUrl.trim() || 'Google Drive video',
+        sourceLabel: sourceAsset?.label || 'Uploaded video',
         recommendedClipId: response.recommendedClipId,
         result: response,
       };
@@ -511,8 +557,10 @@ export function Feature1Page({ session }: Feature1PageProps) {
   const handleStartNew = () => {
     setActiveCoreNode('upload');
     setSourceAsset(null);
-    setGoogleDriveUrl('');
     setTranscriptText('');
+    setTranscriptionPublicId('');
+    setTranscriptionLanguage('');
+    setTranscriptionDetails(null);
     setResult(null);
     setErrorMessage('');
     setStatusMessage('');
@@ -773,99 +821,65 @@ export function Feature1Page({ session }: Feature1PageProps) {
             <div className="flow-panel__content" key="upload">
               <div className="flow-panel__header">
                 <h2>Add Your Source Video</h2>
-                <p>Upload a video file or paste a Google Drive link.</p>
+                <p>Upload a video file via Cloudinary.</p>
               </div>
 
               <div className="flow-panel__body">
-                <div className="toggle-pills">
-                  <button
-                    type="button"
-                    className={`toggle-pill ${sourceMode === 'upload' ? 'toggle-pill--active' : ''}`}
-                    onClick={() => setSourceMode('upload')}
-                  >
-                    Upload File
-                  </button>
-                  <button
-                    type="button"
-                    className={`toggle-pill ${sourceMode === 'drive' ? 'toggle-pill--active' : ''}`}
-                    onClick={() => setSourceMode('drive')}
-                  >
-                    Google Drive Link
-                  </button>
+                <div className="upload-zone">
+                  <div className="upload-zone__actions">
+                    <UploadWidget
+                      buttonText="Choose Video File"
+                      clientAllowedFormats={['mp4', 'mov', 'm4v', 'webm']}
+                      onUploadError={handleSourceUploadError}
+                      onUploadSuccess={handleSourceUploadSuccess}
+                      resourceType="video"
+                    />
+                  </div>
+
+                  {sourceAsset && sourcePreviewUrl && (
+                    <div className="upload-preview">
+                      <div className="upload-preview__video-wrap">
+                        <video autoPlay controls loop muted playsInline src={sourcePreviewUrl} />
+                      </div>
+                      <div className="upload-preview__meta">
+                        <strong>{sourceAsset.label}</strong>
+                        <span>
+                          {sourceAsset.source} •{' '}
+                          {sourceAsset.duration ? `${Math.round(sourceAsset.duration)}s` : 'Loaded'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {sourceMode === 'upload' ? (
-                  <div className="upload-zone">
-                    <div className="upload-zone__actions">
-                      <UploadWidget
-                        buttonText="Choose Video File"
-                        clientAllowedFormats={['mp4', 'mov', 'm4v', 'webm']}
-                        onUploadError={handleSourceUploadError}
-                        onUploadSuccess={handleSourceUploadSuccess}
-                        resourceType="video"
-                      />
-                      <button className="btn btn--ghost" type="button" onClick={handleUseSample}>
-                        Use sample video
-                      </button>
+                {uploadHistory.length > 0 && (
+                  <div className="recent-uploads">
+                    <h4 className="recent-uploads__title">Recent Uploads</h4>
+                    <div className="recent-uploads__grid">
+                      {uploadHistory.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`recent-uploads__card ${sourceAsset?.publicId === item.publicId ? 'recent-uploads__card--active' : ''}`}
+                          onClick={() => handleSelectFromHistory(item)}
+                        >
+                          {item.thumbnailUrl ? (
+                            <img src={item.thumbnailUrl} alt={item.label} className="recent-uploads__thumb" />
+                          ) : (
+                            <div className="recent-uploads__thumb recent-uploads__thumb--placeholder">🎬</div>
+                          )}
+                          <div className="recent-uploads__info">
+                            <span className="recent-uploads__label">{item.label}</span>
+                            <span className="recent-uploads__meta">
+                              {item.duration ? `${Math.round(item.duration)}s` : 'Video'}
+                            </span>
+                          </div>
+                        </button>
+                      ))}
                     </div>
-
-                    {sourceAsset && sourcePreviewUrl && (
-                      <div className="upload-preview">
-                        <div className="upload-preview__video-wrap">
-                          <video autoPlay controls loop muted playsInline src={sourcePreviewUrl} />
-                        </div>
-                        <div className="upload-preview__meta">
-                          <strong>{sourceAsset.label}</strong>
-                          <span>
-                                {sourceAsset.source} •{' '}
-                                {sourceAsset.duration ? `${Math.round(sourceAsset.duration)}s` : 'Loaded'}
-                          </span>
-                        </div>
-                      </div>
-                    )}
                   </div>
-                ) : (
-                  <div className="drive-input">
-                    <label className="form-field">
-                      <span>Google Drive Video Link</span>
-                      <input
-                        type="url"
-                        value={googleDriveUrl}
-                        onChange={(event) => setGoogleDriveUrl(event.target.value)}
-                        placeholder="https://drive.google.com/file/d/.../view"
-                      />
-                    </label>
-                    {googleDriveUrl.trim() && (
-                      <>
-                        <div className="drive-input__check">
-                          <span>✓</span>
-                          <span>Link ready</span>
-                        </div>
-                        {extractDriveFileId(googleDriveUrl) && (
-                          <div className="upload-preview">
-                            <div className="upload-preview__video-wrap">
-                              <iframe
-                                src={`https://drive.google.com/file/d/${extractDriveFileId(googleDriveUrl)}/preview`}
-                                width="100%"
-                                height="380"
-                                allow="autoplay"
-                                allowFullScreen
-                                style={{ border: 'none', borderRadius: '12px 12px 0 0', display: 'block' }
-                                }
-                                title="Drive video preview"
-                              />
-                            </div >
-                            <div className="upload-preview__meta">
-                              <strong>Google Drive Video</strong>
-                              <span>drive.google.com • Linked</span>
-                            </div>
-                          </div >
-                        )}
-                      </>
-                    )}
-                  </div >
                 )}
-              </div >
+              </div>
 
               <div className="flow-panel__nav">
                 <div />
@@ -886,20 +900,66 @@ export function Feature1Page({ session }: Feature1PageProps) {
               <div className="flow-panel__content" key="transcribe">
                 <div className="flow-panel__header">
                   <h2>Transcribe Your Video</h2>
-                  <p>Auto-transcribe or paste your own. Helps the AI find the best moments.</p>
+                  <p>Run Cloudinary transcription on any existing video public ID, then refine the text below.</p>
                 </div>
 
                 <div className="flow-panel__body">
-                  <div className="transcribe-actions">
-                    <button
-                      className="btn btn--primary"
-                      type="button"
-                      onClick={() => void handleTranscribe()}
-                      disabled={isTranscribing}
-                    >
-                      {isTranscribing ? '⏳ Transcribing...' : '🎙 Auto-Transcribe'}
-                    </button>
-                    <span className="transcribe-or">or paste manually below</span>
+                  <div className="transcribe-stack">
+                    <div className="transcribe-config-card">
+                      <div className="transcribe-config-card__header">
+                        <strong>Cloudinary transcription job</strong>
+                        <span>Separate from upload. Paste the video public ID from any Cloudinary pipeline.</span>
+                      </div>
+
+                      <div className="transcribe-config-grid">
+                        <label className="form-field">
+                          <span>Cloudinary public ID</span>
+                          <input
+                            value={transcriptionPublicId}
+                            onChange={(event) => setTranscriptionPublicId(event.target.value)}
+                            placeholder="shorty/my-video"
+                          />
+                        </label>
+
+                        <label className="form-field">
+                          <span>Original language</span>
+                          <input
+                            value={transcriptionLanguage}
+                            onChange={(event) => setTranscriptionLanguage(event.target.value)}
+                            placeholder="en"
+                            maxLength={5}
+                          />
+                        </label>
+                      </div>
+
+                      <div className="transcribe-actions">
+                        <button
+                          className="btn btn--primary"
+                          type="button"
+                          onClick={() => void handleTranscribe()}
+                          disabled={isTranscribing || !transcriptionPublicId.trim()}
+                        >
+                          {isTranscribing ? '⏳ Transcribing...' : '☁️ Run Cloudinary transcription'}
+                        </button>
+                        <button
+                          className="btn btn--ghost"
+                          type="button"
+                          onClick={() => setTranscriptionPublicId(sourceAsset?.publicId || '')}
+                          disabled={!sourceAsset?.publicId}
+                        >
+                          Use current source
+                        </button>
+                        <span className="transcribe-or">Upload stays separate. Manual transcript editing stays available.</span>
+                      </div>
+
+                      {transcriptionDetails && (
+                        <div className="transcribe-config-meta">
+                          <span className="transcribe-meta-pill">Provider: {transcriptionDetails.provider}</span>
+                          <span className="transcribe-meta-pill">Mode: {transcriptionDetails.model}</span>
+                          <span className="transcribe-meta-pill">Asset: {transcriptionDetails.publicId || transcriptionPublicId}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <label className="form-field">
@@ -907,7 +967,10 @@ export function Feature1Page({ session }: Feature1PageProps) {
                     <textarea
                       rows={8}
                       value={transcriptText}
-                      onChange={(event) => setTranscriptText(event.target.value)}
+                      onChange={(event) => {
+                        setTranscriptText(event.target.value);
+                        if (transcriptionPublicId) saveTranscript(transcriptionPublicId, event.target.value);
+                      }}
                       placeholder="Paste transcript text here. Timestamped lines like 00:15 Hook line... work best."
                     />
                   </label>
@@ -951,11 +1014,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                   <div className="generate-summary">
                     <div className="generate-summary__item">
                       <span className="generate-summary__label">Source</span>
-                      <strong>
-                        {sourceMode === 'upload'
-                          ? sourceAsset?.label || 'Uploaded'
-                          : googleDriveUrl.trim() || 'Drive'}
-                      </strong>
+                      <strong>{sourceAsset?.label || 'No video'}</strong>
                     </div>
                     <div className="generate-summary__item">
                       <span className="generate-summary__label">Transcript</span>
