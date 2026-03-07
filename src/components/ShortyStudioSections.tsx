@@ -32,19 +32,6 @@ export function ShortyHero({
   return (
     <header className="shorty-hero">
       <section className="shorty-hero__primary">
-        <div className="shorty-brandbar">
-          <div className="shorty-brand">
-            <div className="shorty-brand__logo-wrap">
-              <img className="shorty-brand__logo" src={boltLogo} alt="Shorty logo" />
-            </div>
-            <div className="shorty-brand__meta">
-              <span>Shorty / creator studio</span>
-              <strong>Short-form editor</strong>
-            </div>
-          </div>
-          <div className="shorty-brandbar__status">Shorts-ready workflow</div>
-        </div>
-
         <span className="shorty-kicker">{model.eyebrow}</span>
         <h1>{model.brandName}</h1>
         <p>{model.heroBody}</p>

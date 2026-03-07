@@ -31,6 +31,7 @@ import {
 } from './components/ShortyStudioSections';
 import { ShortyStudioController } from './shorty/ShortyStudioController';
 import { ShortyStudioModel } from './shorty/ShortyStudioModel';
+import boltLogo from './assets/bolt-logo.png';
 import './App.css';
 
 const DEFAULT_STORY_PRESET = STORY_PRESETS[0];
@@ -136,13 +137,24 @@ function App() {
 
   return (
     <div className="shorty-shell">
-      <ShortyHero
-        model={model}
-        copiedToken={copiedToken}
-        isSaving={isSaving}
-        onCopyManifest={() => void copyText('manifest', manifestJson)}
-        onSaveSnapshot={() => void controller.saveSnapshot()}
-      />
+      <header className="shorty-topbar">
+        <div className="shorty-topbar__brand">
+          <div className="shorty-topbar__logo-wrap">
+            <img className="shorty-topbar__logo" src={boltLogo} alt="Shorty logo" />
+          </div>
+          <div className="shorty-topbar__meta">
+            <strong>Shorty</strong>
+            <span>Creator Studio</span>
+          </div>
+        </div>
+
+        <div className="shorty-topbar__status-group">
+          <span className="shorty-topbar__status">
+            {model.uploadsAvailable ? 'Uploads live' : 'Sample mode'}
+          </span>
+          <span className="shorty-topbar__status">Cloud {cloudName}</span>
+        </div>
+      </header>
 
       <main className="shorty-workspace">
         <aside className="shorty-sidebar">
@@ -187,6 +199,14 @@ function App() {
         </aside>
 
         <section className="shorty-main">
+          <ShortyHero
+            model={model}
+            copiedToken={copiedToken}
+            isSaving={isSaving}
+            onCopyManifest={() => void copyText('manifest', manifestJson)}
+            onSaveSnapshot={() => void controller.saveSnapshot()}
+          />
+
           <ShortyPreviewDeck
             draft={draft}
             manifests={manifests}
