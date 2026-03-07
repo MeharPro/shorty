@@ -9,4 +9,12 @@ export default defineConfig({
     'process.env.CLOUDINARY_SOURCE': '"cli"',
     'process.env.CLD_CLI': '"true"',
   },
+  server: {
+    proxy: {
+      '/api': {
+        target: `http://127.0.0.1:${process.env.VERCEL_PORT || 3000}`,
+        changeOrigin: true,
+      },
+    },
+  },
 })

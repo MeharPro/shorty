@@ -5,24 +5,47 @@ import {
   UploadWidget,
   type CloudinaryUploadResult,
 } from '../cloudinary/UploadWidget';
-import { SAMPLE_PRIMARY_ASSET } from '../data/presets';
+
 import { buildPlayableSourceUrl, createMediaAssetFromUpload } from '../lib/rendering';
-import { loadReelHistory, saveReelHistory } from '../lib/persistence';
+import {
+  loadReelHistory,
+  saveReelHistory,
+  loadUploadHistory,
+  saveUploadHistory,
+  loadTranscript,
+  loadTranscriptData,
+  saveTranscript,
+  saveTranscriptData,
+  type UploadHistoryItem,
+} from '../lib/persistence';
+import { buildCaptionCues } from '../lib/captions';
+import { planFeature1Pipeline } from '../lib/feature1Agent';
 import { generateReels } from '../lib/reels';
+import { auditGeneratedClips, chooseRecommendedClip } from '../lib/reelQualityAudit';
+import { analyzeVideoExpressions } from '../lib/visualAnalysis';
 import {
   fetchReelHistory,
   hasSupabaseBrowserConfig,
   persistReelHistoryEntry,
 } from '../lib/supabase';
+import { FaceDetectVideo } from '../components/FaceDetectVideo';
 import { transcribeVideo } from '../lib/transcription';
 import type { ShortySession } from '../lib/session';
-import type { MediaAsset, ReelGenerationResponse, ReelHistoryEntry } from '../types';
+import type {
+  MediaAsset,
+  Feature1AgentPlan,
+  Feature1EditingAdvice,
+  ReelGenerationResponse,
+  ReelHistoryEntry,
+  VideoTranscriptionResponse,
+  VisualAnalysisSummary,
+} from '../types';
 
 interface Feature1PageProps {
   session: ShortySession | null;
 }
 
-type CoreNodeId = 'upload' | 'transcribe' | 'generate' | 'results';
+type CoreNodeId = 'upload' | 'transcribe' | 'generate' | 'hook-filter' | 'results';
 type NodeStatus = 'locked' | 'available' | 'active' | 'completed';
 type LogicBlockType =
   | 'hook-filter'
@@ -95,13 +118,23 @@ const CORE_NODE_HEIGHT = 116;
 const LOGIC_NODE_WIDTH = 220;
 const DEFAULT_VIEWPORT_OFFSET = { x: 120, y: 120 };
 
-const CORE_SEQUENCE: CoreNodeId[] = ['upload', 'transcribe', 'generate', 'results'];
+const CORE_SEQUENCE: CoreNodeId[] = ['upload', 'transcribe', 'generate', 'hook-filter', 'results'];
+
+const GENERATE_STAGES = [
+  { label: 'Scanning facial expressions…', duration: 400 },
+  { label: 'Analyzing transcript…', duration: 1200 },
+  { label: 'Finding viral moments…', duration: 1400 },
+  { label: 'Scoring hooks…', duration: 1000 },
+  { label: 'Building clips…', duration: 800 },
+  { label: 'Ranking by virality…', duration: 600 },
+];
 
 const INITIAL_CORE_NODES: CoreFlowNode[] = [
-  { id: 'upload', label: 'Upload', icon: '📤', description: 'Add source video', x: 120, y: 120 },
-  { id: 'transcribe', label: 'Transcribe', icon: '📝', description: 'Extract transcript', x: 440, y: 120 },
-  { id: 'generate', label: 'Generate', icon: '⚡', description: 'Create reels', x: 760, y: 120 },
-  { id: 'results', label: 'Results', icon: '🏆', description: 'View ranked clips', x: 1080, y: 120 },
+  { id: 'upload', label: 'Upload', icon: '📤', description: 'Add source video', x: 80, y: 120 },
+  { id: 'transcribe', label: 'Transcribe', icon: '📝', description: 'Extract transcript', x: 360, y: 120 },
+  { id: 'generate', label: 'Generate', icon: '⚡', description: 'Create reels', x: 640, y: 120 },
+  { id: 'hook-filter', label: 'Hook Filter', icon: '🪝', description: 'Review hooks', x: 920, y: 120 },
+  { id: 'results', label: 'Results', icon: '🏆', description: 'View ranked clips', x: 1200, y: 120 },
 ];
 
 const LOGIC_BLOCK_LIBRARY: LogicBlockTemplate[] = [
@@ -170,9 +203,98 @@ function createInitialLogicBlocks(): LogicBlock[] {
   ];
 }
 
-function extractDriveFileId(url: string): string | null {
-  const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-  return match ? match[1] : null;
+const AGENT_BLOCK_ATTACHMENTS: Record<LogicBlockType, CoreNodeId> = {
+  'hook-filter': 'generate',
+  'caption-pass': 'results',
+  'viral-score': 'generate',
+  voiceover: 'generate',
+  'brand-safety': 'results',
+  'export-split': 'results',
+};
+
+const AGENT_WISH_DEFAULT =
+  'Keep the active speaker face fully visible, tighten captions so they never overflow, and favor viral hooks with controlled motion.';
+const AGENT_CANVAS_SUMMARY_DEFAULT =
+  'Agent changes can add or update flow blocks, then focus the edited stage in the canvas.';
+
+interface AgentFlowchartUpdate {
+  blocks: LogicBlock[];
+  touchedBlockIds: string[];
+  focusedStage: CoreNodeId | null;
+  addedCount: number;
+  updatedCount: number;
+}
+
+function getAgentBlockCoordinates(blocks: LogicBlock[], attachTo: CoreNodeId, excludeId?: string) {
+  const siblings = blocks.filter(
+    (block) => block.attachTo === attachTo && (!excludeId || block.id !== excludeId)
+  ).length;
+
+  return {
+    x: attachTo === 'generate' ? 760 + siblings * 48 : 1080 + siblings * 48,
+    y: 300 + siblings * 70,
+  };
+}
+
+function applyAgentLogicBlocks(current: LogicBlock[], requestedTypes: string[]): AgentFlowchartUpdate {
+  const next = [...current];
+  const touchedBlockIds: string[] = [];
+  let focusedStage: CoreNodeId | null = null;
+  let addedCount = 0;
+  let updatedCount = 0;
+
+  for (const rawType of requestedTypes) {
+    const type = rawType as LogicBlockType;
+    const template = LOGIC_BLOCK_LIBRARY.find((item) => item.type === type);
+    if (!template) {
+      continue;
+    }
+
+    const attachTo = AGENT_BLOCK_ATTACHMENTS[type];
+    const existingIndex = next.findIndex((block) => block.type === type);
+    focusedStage = attachTo;
+
+    if (existingIndex >= 0) {
+      const existing = next[existingIndex];
+      const nextPosition =
+        existing.attachTo === attachTo
+          ? { x: existing.x, y: existing.y }
+          : getAgentBlockCoordinates(next, attachTo, existing.id);
+
+      next[existingIndex] = {
+        ...existing,
+        ...template,
+        attachTo,
+        x: nextPosition.x,
+        y: nextPosition.y,
+        note: 'Updated by the local pipeline agent from your latest prompt.',
+      };
+      touchedBlockIds.push(existing.id);
+      updatedCount += 1;
+      continue;
+    }
+
+    const position = getAgentBlockCoordinates(next, attachTo);
+    const id = `logic-${type}-${crypto.randomUUID()}`;
+    next.push({
+      ...template,
+      id,
+      attachTo,
+      x: position.x,
+      y: position.y,
+      note: 'Added by the local pipeline agent.',
+    });
+    touchedBlockIds.push(id);
+    addedCount += 1;
+  }
+
+  return {
+    blocks: next,
+    touchedBlockIds,
+    focusedStage,
+    addedCount,
+    updatedCount,
+  };
 }
 
 function formatScore(value: number): string {
@@ -203,22 +325,37 @@ export function Feature1Page({ session }: Feature1PageProps) {
   const [viewportOffset, setViewportOffset] = useState(DEFAULT_VIEWPORT_OFFSET);
   const [dragState, setDragState] = useState<DragState>(null);
 
-  const [sourceMode, setSourceMode] = useState<'upload' | 'drive'>('upload');
   const [sourceAsset, setSourceAsset] = useState<MediaAsset | null>(null);
-  const [googleDriveUrl, setGoogleDriveUrl] = useState('');
 
   const [transcriptText, setTranscriptText] = useState('');
+  const [transcriptionPublicId, setTranscriptionPublicId] = useState('');
+  const [transcriptionLanguage, setTranscriptionLanguage] = useState('');
+  const [transcriptionDetails, setTranscriptionDetails] = useState<VideoTranscriptionResponse | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
 
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generateStage, setGenerateStage] = useState(0);
   const [result, setResult] = useState<ReelGenerationResponse | null>(null);
+  const [filteredClipIds, setFilteredClipIds] = useState<Set<string>>(new Set());
+  const [visualAnalysis, setVisualAnalysis] = useState<VisualAnalysisSummary | null>(null);
+
+  // Editing options
+  const [editRemoveSilences, setEditRemoveSilences] = useState(true);
+  const [editShakingCaptions, setEditShakingCaptions] = useState(true);
+  const [editFaceFocus, setEditFaceFocus] = useState(true);
+  const [editSafeFaceFrame, setEditSafeFaceFrame] = useState(true);
+  const [agentWish, setAgentWish] = useState(AGENT_WISH_DEFAULT);
+  const [agentPlan, setAgentPlan] = useState<Feature1AgentPlan | null>(null);
+  const [isApplyingAgent, setIsApplyingAgent] = useState(false);
+  const [agentCanvasSummary, setAgentCanvasSummary] = useState(AGENT_CANVAS_SUMMARY_DEFAULT);
 
   const [history, setHistory] = useState<ReelHistoryEntry[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
+  const agentCaptionDensity = agentPlan?.editingOptions.captionDensity ?? 'balanced';
 
   const sourcePreviewUrl = sourceAsset ? buildPlayableSourceUrl(sourceAsset) : null;
-  const hasSource = sourceMode === 'upload' ? !!sourceAsset : !!googleDriveUrl.trim();
+  const hasSource = !!sourceAsset;
 
   const getNodeStatus = useCallback(
     (id: CoreNodeId): NodeStatus => {
@@ -354,6 +491,26 @@ export function Feature1Page({ session }: Feature1PageProps) {
   }, [coreNodeMap, getNodeStatus, logicBlocks, viewportOffset]);
 
   const selectedLogicBlock = logicBlocks.find((block) => block.id === selectedLogicBlockId) ?? null;
+  const clipCaptionMap = useMemo(() => {
+    if (!result || !transcriptionDetails?.segments?.length) {
+      return new Map<string, ReturnType<typeof buildCaptionCues>>();
+    }
+
+    return new Map(
+      result.clips.map((clip) => [
+        clip.id,
+        buildCaptionCues(transcriptionDetails.segments ?? [], {
+          clipStart: clip.startOffset,
+          clipDuration: clip.duration,
+          maxWordsPerCue: agentCaptionDensity === 'tight' ? 2 : editShakingCaptions ? 2 : 4,
+          maxCharsPerCue: agentCaptionDensity === 'tight' ? 12 : editShakingCaptions ? 14 : 24,
+          maxCueDuration: agentCaptionDensity === 'tight' ? 1.4 : editShakingCaptions ? 1.6 : 2.5,
+          maxLineChars: agentCaptionDensity === 'tight' ? 9 : editShakingCaptions ? 10 : 16,
+          maxLinesPerCue: 2,
+        }),
+      ])
+    );
+  }, [agentCaptionDensity, editShakingCaptions, result, transcriptionDetails]);
 
   const startPan = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -435,34 +592,176 @@ export function Feature1Page({ session }: Feature1PageProps) {
     setStatusMessage('Flow viewport recentered.');
   };
 
+  const [uploadHistory, setUploadHistory] = useState<UploadHistoryItem[]>(() => loadUploadHistory());
+
+  const resetGeneratedState = useCallback(() => {
+    setResult(null);
+    setFilteredClipIds(new Set());
+    setVisualAnalysis(null);
+  }, []);
+
   const handleSourceUploadSuccess = (uploadResult: CloudinaryUploadResult) => {
-    setSourceAsset(createMediaAssetFromUpload(uploadResult, 'Uploaded Source Video'));
+    const asset = createMediaAssetFromUpload(uploadResult, uploadResult.original_filename || 'Uploaded Video');
+    setSourceAsset(asset);
+    setTranscriptionPublicId(uploadResult.public_id);
+    resetGeneratedState();
     setStatusMessage('Video uploaded!');
+
+    // Save to upload history
+    const historyItem: UploadHistoryItem = {
+      id: asset.id,
+      publicId: uploadResult.public_id,
+      secureUrl: uploadResult.secure_url,
+      label: uploadResult.original_filename || 'Uploaded Video',
+      duration: uploadResult.duration,
+      thumbnailUrl: uploadResult.secure_url?.replace('/video/upload/', '/video/upload/w_240,h_135,c_fill,so_0/').replace(/\.[^.]+$/, '.jpg'),
+      uploadedAt: new Date().toISOString(),
+    };
+    const next = [historyItem, ...uploadHistory.filter(h => h.publicId !== uploadResult.public_id)].slice(0, 10);
+    setUploadHistory(next);
+    saveUploadHistory(next);
+  };
+
+  const handleSelectFromHistory = (item: UploadHistoryItem) => {
+    const asset: MediaAsset = {
+      id: item.id,
+      label: item.label,
+      publicId: item.publicId,
+      secureUrl: item.secureUrl,
+      source: 'upload',
+      resourceType: 'video',
+      strategy: 'cloudinary-public-id',
+      duration: item.duration,
+    };
+    setSourceAsset(asset);
+    setTranscriptionPublicId(item.publicId);
+    resetGeneratedState();
+    // Load any saved transcript for this video
+    const saved = loadTranscriptData(item.publicId);
+    if (saved?.transcript) {
+      setTranscriptText(saved.transcript);
+      setTranscriptionDetails((current) => ({
+        transcript: saved.transcript,
+        provider: saved.provider || current?.provider || 'cloudinary',
+        model: saved.model || current?.model || 'auto_transcription',
+        publicId: item.publicId,
+        sourceUrl: saved.transcriptUrl || current?.sourceUrl || '',
+        transcriptUrl: saved.transcriptUrl || current?.transcriptUrl,
+        segments: saved.segments,
+        generatedAt: saved.generatedAt || current?.generatedAt || new Date().toISOString(),
+      }));
+      setStatusMessage(`Loaded "${item.label}" with saved transcript.`);
+    } else {
+      setTranscriptText(loadTranscript(item.publicId));
+      setTranscriptionDetails(null);
+      setStatusMessage(`Loaded "${item.label}" from recent uploads.`);
+    }
   };
 
   const handleSourceUploadError = (error: Error) => {
     setErrorMessage(error.message || 'Upload failed.');
   };
 
-  const handleUseSample = () => {
-    setSourceAsset(SAMPLE_PRIMARY_ASSET);
-    setStatusMessage('Sample video loaded.');
-  };
+
 
   const handleTranscribe = async () => {
+    const publicId = transcriptionPublicId.trim();
+    if (!publicId) {
+      setErrorMessage('Enter a Cloudinary public ID to run transcription.');
+      return;
+    }
+
     setIsTranscribing(true);
     setErrorMessage('');
     try {
       const response = await transcribeVideo({
-        sourceAsset: sourceMode === 'upload' ? sourceAsset : null,
-        googleDriveUrl: sourceMode === 'drive' ? googleDriveUrl.trim() : '',
+        sourceAsset: null,
+        googleDriveUrl: '',
+        publicId,
+        language: transcriptionLanguage.trim() || undefined,
       });
       setTranscriptText(response.transcript);
-      setStatusMessage('Transcription complete!');
+      setTranscriptionDetails(response);
+      saveTranscriptData(publicId, response);
+      setStatusMessage(`Cloudinary transcript loaded for ${response.publicId || publicId}.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to transcribe.');
     } finally {
       setIsTranscribing(false);
+    }
+  };
+
+  const currentEditingOptions: Feature1EditingAdvice = {
+    ...(agentPlan?.editingOptions ?? {}),
+    removeSilences: editRemoveSilences,
+    shakingCaptions: editShakingCaptions,
+    faceFocus: editFaceFocus,
+    safeFaceFrame: editSafeFaceFrame,
+    qaEnabled: true,
+  };
+
+  const handleApplyAgent = async () => {
+    setIsApplyingAgent(true);
+    setErrorMessage('');
+
+    try {
+      const plan = await planFeature1Pipeline({
+        wish: agentWish,
+        transcriptPreview: transcriptText.trim().slice(0, 1200),
+        currentEditingOptions,
+        activeLogicBlocks: logicBlocks.map((block) => block.type),
+      });
+
+      setAgentPlan(plan);
+      if (typeof plan.editingOptions.removeSilences === 'boolean') {
+        setEditRemoveSilences(plan.editingOptions.removeSilences);
+      }
+      if (typeof plan.editingOptions.shakingCaptions === 'boolean') {
+        setEditShakingCaptions(plan.editingOptions.shakingCaptions);
+      }
+      if (typeof plan.editingOptions.faceFocus === 'boolean') {
+        setEditFaceFocus(plan.editingOptions.faceFocus);
+      }
+      if (typeof plan.editingOptions.safeFaceFrame === 'boolean') {
+        setEditSafeFaceFrame(plan.editingOptions.safeFaceFrame);
+      }
+
+      const flowchartUpdate = applyAgentLogicBlocks(logicBlocks, plan.logicBlocks);
+      setLogicBlocks(flowchartUpdate.blocks);
+      if (flowchartUpdate.touchedBlockIds.length > 0) {
+        setSelectedLogicBlockId(flowchartUpdate.touchedBlockIds[flowchartUpdate.touchedBlockIds.length - 1]);
+      }
+      if (flowchartUpdate.focusedStage) {
+        setActiveCoreNode(
+          flowchartUpdate.focusedStage === 'results' && !result ? 'generate' : flowchartUpdate.focusedStage
+        );
+      }
+
+      if (flowchartUpdate.addedCount || flowchartUpdate.updatedCount) {
+        const summaryParts = [];
+        if (flowchartUpdate.addedCount) {
+          summaryParts.push(`${flowchartUpdate.addedCount} added`);
+        }
+        if (flowchartUpdate.updatedCount) {
+          summaryParts.push(`${flowchartUpdate.updatedCount} updated`);
+        }
+        const totalFlowchartChanges = flowchartUpdate.addedCount + flowchartUpdate.updatedCount;
+        setAgentCanvasSummary(
+          `Flowchart edited: ${summaryParts.join(', ')} block${totalFlowchartChanges === 1 ? '' : 's'}.`
+        );
+      } else {
+        setAgentCanvasSummary('Agent updated reel settings without changing any flow blocks.');
+      }
+
+      setStatusMessage(
+        flowchartUpdate.addedCount || flowchartUpdate.updatedCount
+          ? `Local agent updated Feature 1 using ${plan.model} and edited the flowchart.`
+          : `Local agent updated Feature 1 using ${plan.model}.`
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to apply local AI changes.');
+    } finally {
+      setIsApplyingAgent(false);
     }
   };
 
@@ -472,23 +771,63 @@ export function Feature1Page({ session }: Feature1PageProps) {
     }
 
     setIsGenerating(true);
+    setGenerateStage(0);
     setErrorMessage('');
+
     try {
+      let resolvedVisualAnalysis = visualAnalysis;
+
+      if (
+        sourcePreviewUrl &&
+        (!resolvedVisualAnalysis || resolvedVisualAnalysis.sourcePublicId !== sourceAsset?.publicId)
+      ) {
+        try {
+          resolvedVisualAnalysis = await analyzeVideoExpressions({
+            src: sourcePreviewUrl,
+            duration: sourceAsset?.duration,
+            sourcePublicId: sourceAsset?.publicId,
+          });
+          setVisualAnalysis(resolvedVisualAnalysis);
+        } catch (analysisError) {
+          setStatusMessage(
+            analysisError instanceof Error
+              ? `${analysisError.message} Continuing with transcript and timeline scoring.`
+              : 'MediaPipe expression scan skipped. Continuing with transcript and timeline scoring.'
+          );
+          resolvedVisualAnalysis = null;
+          setVisualAnalysis(null);
+        }
+      }
+
+      for (let i = 1; i < GENERATE_STAGES.length; i++) {
+        setGenerateStage(i);
+        await new Promise((resolve) => setTimeout(resolve, GENERATE_STAGES[i].duration));
+      }
+
       const response = await generateReels({
-        sourceAsset: sourceMode === 'upload' ? sourceAsset : null,
-        googleDriveUrl: sourceMode === 'drive' ? googleDriveUrl.trim() : '',
+        sourceAsset,
+        googleDriveUrl: '',
         transcriptText: transcriptText.trim(),
+        visualAnalysis: resolvedVisualAnalysis,
+        editingOptions: currentEditingOptions,
       });
+
+      const auditedClips =
+        currentEditingOptions.qaEnabled === false
+          ? response.clips
+          : await auditGeneratedClips(response.clips, currentEditingOptions);
+      const auditedResponse: ReelGenerationResponse = {
+        ...response,
+        clips: auditedClips,
+        recommendedClipId: chooseRecommendedClip(auditedClips, response.recommendedClipId),
+      };
 
       const entry: ReelHistoryEntry = {
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
-        sourceLabel:
-          sourceMode === 'upload'
-            ? sourceAsset?.label || 'Uploaded video'
-            : googleDriveUrl.trim() || 'Google Drive video',
-        recommendedClipId: response.recommendedClipId,
-        result: response,
+        sourceLabel: sourceAsset?.label || 'Uploaded video',
+        recommendedClipId: auditedResponse.recommendedClipId,
+        result: auditedResponse,
       };
 
       const nextHistory = [entry, ...history].slice(0, 10);
@@ -498,22 +837,50 @@ export function Feature1Page({ session }: Feature1PageProps) {
         await persistReelHistoryEntry(session.userId, entry);
       }
 
-      setResult(response);
-      setActiveCoreNode('results');
-      setStatusMessage('Reels generated and ranked.');
+      setResult(auditedResponse);
+      setVisualAnalysis(auditedResponse.visualAnalysis ?? resolvedVisualAnalysis ?? null);
+      // Auto-enable all clips in filter
+      setFilteredClipIds(new Set(auditedResponse.clips.map((c) => c.id)));
+      setActiveCoreNode('hook-filter');
+      setStatusMessage(
+        currentEditingOptions.qaEnabled === false
+          ? 'Reels generated! Review hooks below.'
+          : 'Reels generated and QA-checked for speaker framing.'
+      );
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to generate reels.');
     } finally {
       setIsGenerating(false);
+      setGenerateStage(0);
     }
+  };
+
+  const toggleClipFilter = (clipId: string) => {
+    setFilteredClipIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(clipId)) {
+        next.delete(clipId);
+      } else {
+        next.add(clipId);
+      }
+      return next;
+    });
   };
 
   const handleStartNew = () => {
     setActiveCoreNode('upload');
     setSourceAsset(null);
-    setGoogleDriveUrl('');
     setTranscriptText('');
+    setTranscriptionPublicId('');
+    setTranscriptionLanguage('');
+    setTranscriptionDetails(null);
     setResult(null);
+    setFilteredClipIds(new Set());
+    setVisualAnalysis(null);
+    setEditSafeFaceFrame(true);
+    setAgentPlan(null);
+    setAgentWish(AGENT_WISH_DEFAULT);
+    setAgentCanvasSummary(AGENT_CANVAS_SUMMARY_DEFAULT);
     setErrorMessage('');
     setStatusMessage('');
   };
@@ -545,14 +912,71 @@ export function Feature1Page({ session }: Feature1PageProps) {
         </p>
       </div>
 
-      <section className="flow-workspace flow-workspace--opal">
-        <aside className="flow-library">
-          <div className="flow-library__header">
-            <span className="feature-page__kicker">Library</span>
-            <h2>Blocks</h2>
-            <p>Drop more logic into the pipeline as your Feature 1 workflow grows.</p>
+      <section className="feature-agent-stage">
+        <div className="agent-panel agent-panel--hero" data-testid="feature1-agent-panel">
+          <div className="agent-panel__hero-copy">
+            <div className="feature-page__kicker">Local pipeline agent</div>
+            <h2>Put the AI in charge of the flowchart</h2>
+            <p>
+              Describe the reel behavior you want. The local agent updates Feature 1 settings,
+              edits matching flow blocks on the canvas, and focuses the affected stage.
+            </p>
+            <div className="agent-panel__hero-chips">
+              <span>{logicBlocks.length} flow blocks live</span>
+              <span>Active stage: {coreNodeMap[activeCoreNode].label}</span>
+              <span>
+                Inspector: {selectedLogicBlock ? selectedLogicBlock.label : 'workflow overview'}
+              </span>
+            </div>
           </div>
 
+          <div className="agent-panel__hero-controls">
+            <div className="agent-panel__header">
+              <div>
+                <h3>Flowchart editor</h3>
+                <p>Runs on Ollama locally and rewires the canvas before you generate.</p>
+              </div>
+              <span className="agent-panel__badge">{agentPlan?.model || 'Local model'}</span>
+            </div>
+            <textarea
+              className="agent-panel__input"
+              data-testid="feature1-agent-wish"
+              rows={4}
+              value={agentWish}
+              onChange={(event) => setAgentWish(event.target.value)}
+              placeholder="Example: keep the active speaker fully visible, tighten captions, and rework the flowchart for stronger hook scoring."
+            />
+            <div className="agent-panel__actions">
+              <button
+                className="btn btn--ghost btn--sm"
+                type="button"
+                onClick={() => void handleApplyAgent()}
+                disabled={isApplyingAgent}
+                data-testid="feature1-agent-apply"
+              >
+                {isApplyingAgent ? 'Planning…' : 'Apply Local AI Changes'}
+              </button>
+              <span>{agentPlan ? agentPlan.summary : agentCanvasSummary}</span>
+            </div>
+            <div className="agent-panel__flow-summary">
+              <span>{agentCanvasSummary}</span>
+              {agentPlan?.logicBlocks?.length ? (
+                <span>Flow edits requested: {agentPlan.logicBlocks.join(', ')}</span>
+              ) : null}
+            </div>
+            {agentPlan?.notes?.length ? (
+              <ul className="agent-panel__notes">
+                {agentPlan.notes.map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        </div>
+      </section>
+
+      <section className="flow-workspace flow-workspace--opal">
+        <aside className="flow-library">
           <div className="flow-library__list">
             {LOGIC_BLOCK_LIBRARY.map((block) => (
               <button
@@ -765,7 +1189,11 @@ export function Feature1Page({ session }: Feature1PageProps) {
       </section>
 
       {errorMessage && <div className="wizard-error">{errorMessage}</div>}
-      {statusMessage && !errorMessage && <div className="inline-banner">{statusMessage}</div>}
+      {statusMessage && !errorMessage && (
+        <div className="inline-banner" data-testid="feature1-status-banner">
+          {statusMessage}
+        </div>
+      )}
 
       <section className="flow-panel-layout">
         <div className="flow-panel flow-panel--opal">
@@ -773,99 +1201,66 @@ export function Feature1Page({ session }: Feature1PageProps) {
             <div className="flow-panel__content" key="upload">
               <div className="flow-panel__header">
                 <h2>Add Your Source Video</h2>
-                <p>Upload a video file or paste a Google Drive link.</p>
+                <p>Upload a video file via Cloudinary.</p>
               </div>
 
               <div className="flow-panel__body">
-                <div className="toggle-pills">
-                  <button
-                    type="button"
-                    className={`toggle-pill ${sourceMode === 'upload' ? 'toggle-pill--active' : ''}`}
-                    onClick={() => setSourceMode('upload')}
-                  >
-                    Upload File
-                  </button>
-                  <button
-                    type="button"
-                    className={`toggle-pill ${sourceMode === 'drive' ? 'toggle-pill--active' : ''}`}
-                    onClick={() => setSourceMode('drive')}
-                  >
-                    Google Drive Link
-                  </button>
+                <div className="upload-zone">
+                  <div className="upload-zone__actions">
+                    <UploadWidget
+                      buttonText="Choose Video File"
+                      clientAllowedFormats={['mp4', 'mov', 'm4v', 'webm']}
+                      onUploadError={handleSourceUploadError}
+                      onUploadSuccess={handleSourceUploadSuccess}
+                      resourceType="video"
+                    />
+                  </div>
+
+                  {sourceAsset && sourcePreviewUrl && (
+                    <div className="upload-preview">
+                      <div className="upload-preview__video-wrap">
+                        <video autoPlay controls loop muted playsInline src={sourcePreviewUrl} />
+                      </div>
+                      <div className="upload-preview__meta">
+                        <strong>{sourceAsset.label}</strong>
+                        <span>
+                          {sourceAsset.source} •{' '}
+                          {sourceAsset.duration ? `${Math.round(sourceAsset.duration)}s` : 'Loaded'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {sourceMode === 'upload' ? (
-                  <div className="upload-zone">
-                    <div className="upload-zone__actions">
-                      <UploadWidget
-                        buttonText="Choose Video File"
-                        clientAllowedFormats={['mp4', 'mov', 'm4v', 'webm']}
-                        onUploadError={handleSourceUploadError}
-                        onUploadSuccess={handleSourceUploadSuccess}
-                        resourceType="video"
-                      />
-                      <button className="btn btn--ghost" type="button" onClick={handleUseSample}>
-                        Use sample video
-                      </button>
+                {uploadHistory.length > 0 && (
+                  <div className="recent-uploads">
+                    <h4 className="recent-uploads__title">Recent Uploads</h4>
+                    <div className="recent-uploads__grid">
+                      {uploadHistory.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`recent-uploads__card ${sourceAsset?.publicId === item.publicId ? 'recent-uploads__card--active' : ''}`}
+                          onClick={() => handleSelectFromHistory(item)}
+                          data-testid="recent-upload-card"
+                        >
+                          {item.thumbnailUrl ? (
+                            <img src={item.thumbnailUrl} alt={item.label} className="recent-uploads__thumb" />
+                          ) : (
+                            <div className="recent-uploads__thumb recent-uploads__thumb--placeholder">🎬</div>
+                          )}
+                          <div className="recent-uploads__info">
+                            <span className="recent-uploads__label">{item.label}</span>
+                            <span className="recent-uploads__meta">
+                              {item.duration ? `${Math.round(item.duration)}s` : 'Video'}
+                            </span>
+                          </div>
+                        </button>
+                      ))}
                     </div>
-
-                    {sourceAsset && sourcePreviewUrl && (
-                      <div className="upload-preview">
-                        <div className="upload-preview__video-wrap">
-                          <video autoPlay controls loop muted playsInline src={sourcePreviewUrl} />
-                        </div>
-                        <div className="upload-preview__meta">
-                          <strong>{sourceAsset.label}</strong>
-                          <span>
-                                {sourceAsset.source} •{' '}
-                                {sourceAsset.duration ? `${Math.round(sourceAsset.duration)}s` : 'Loaded'}
-                          </span>
-                        </div>
-                      </div>
-                    )}
                   </div>
-                ) : (
-                  <div className="drive-input">
-                    <label className="form-field">
-                      <span>Google Drive Video Link</span>
-                      <input
-                        type="url"
-                        value={googleDriveUrl}
-                        onChange={(event) => setGoogleDriveUrl(event.target.value)}
-                        placeholder="https://drive.google.com/file/d/.../view"
-                      />
-                    </label>
-                    {googleDriveUrl.trim() && (
-                      <>
-                        <div className="drive-input__check">
-                          <span>✓</span>
-                          <span>Link ready</span>
-                        </div>
-                        {extractDriveFileId(googleDriveUrl) && (
-                          <div className="upload-preview">
-                            <div className="upload-preview__video-wrap">
-                              <iframe
-                                src={`https://drive.google.com/file/d/${extractDriveFileId(googleDriveUrl)}/preview`}
-                                width="100%"
-                                height="380"
-                                allow="autoplay"
-                                allowFullScreen
-                                style={{ border: 'none', borderRadius: '12px 12px 0 0', display: 'block' }
-                                }
-                                title="Drive video preview"
-                              />
-                            </div >
-                            <div className="upload-preview__meta">
-                              <strong>Google Drive Video</strong>
-                              <span>drive.google.com • Linked</span>
-                            </div>
-                          </div >
-                        )}
-                      </>
-                    )}
-                  </div >
                 )}
-              </div >
+              </div>
 
               <div className="flow-panel__nav">
                 <div />
@@ -874,6 +1269,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                   type="button"
                   onClick={() => setActiveCoreNode('transcribe')}
                   disabled={!hasSource}
+                  data-testid="feature1-next-transcribe"
                 >
                   Next: Transcribe →
                 </button>
@@ -886,28 +1282,86 @@ export function Feature1Page({ session }: Feature1PageProps) {
               <div className="flow-panel__content" key="transcribe">
                 <div className="flow-panel__header">
                   <h2>Transcribe Your Video</h2>
-                  <p>Auto-transcribe or paste your own. Helps the AI find the best moments.</p>
+                  <p>Run Cloudinary transcription on any existing video public ID, then refine the text below.</p>
                 </div>
 
                 <div className="flow-panel__body">
-                  <div className="transcribe-actions">
-                    <button
-                      className="btn btn--primary"
-                      type="button"
-                      onClick={() => void handleTranscribe()}
-                      disabled={isTranscribing}
-                    >
-                      {isTranscribing ? '⏳ Transcribing...' : '🎙 Auto-Transcribe'}
-                    </button>
-                    <span className="transcribe-or">or paste manually below</span>
+                  <div className="transcribe-stack">
+                    <div className="transcribe-config-card">
+                      <div className="transcribe-config-card__header">
+                        <strong>Cloudinary transcription job</strong>
+                        <span>Separate from upload. Paste the video public ID from any Cloudinary pipeline.</span>
+                      </div>
+
+                      <div className="transcribe-config-grid">
+                        <label className="form-field">
+                          <span>Cloudinary public ID</span>
+                          <input
+                            value={transcriptionPublicId}
+                            onChange={(event) => setTranscriptionPublicId(event.target.value)}
+                            placeholder="shorty/my-video"
+                          />
+                        </label>
+
+                        <label className="form-field">
+                          <span>Original language</span>
+                          <input
+                            value={transcriptionLanguage}
+                            onChange={(event) => setTranscriptionLanguage(event.target.value)}
+                            placeholder="en"
+                            maxLength={5}
+                          />
+                        </label>
+                      </div>
+
+                      <div className="transcribe-actions">
+                        <button
+                          className="btn btn--primary"
+                          type="button"
+                          onClick={() => void handleTranscribe()}
+                          disabled={isTranscribing || !transcriptionPublicId.trim()}
+                        >
+                          {isTranscribing ? '⏳ Transcribing...' : '☁️ Run Cloudinary transcription'}
+                        </button>
+                        <button
+                          className="btn btn--ghost"
+                          type="button"
+                          onClick={() => setTranscriptionPublicId(sourceAsset?.publicId || '')}
+                          disabled={!sourceAsset?.publicId}
+                        >
+                          Use current source
+                        </button>
+                        <span className="transcribe-or">Upload stays separate. Manual transcript editing stays available.</span>
+                      </div>
+
+                      {transcriptionDetails && (
+                        <div className="transcribe-config-meta">
+                          <span className="transcribe-meta-pill">Provider: {transcriptionDetails.provider}</span>
+                          <span className="transcribe-meta-pill">Mode: {transcriptionDetails.model}</span>
+                          <span className="transcribe-meta-pill">Asset: {transcriptionDetails.publicId || transcriptionPublicId}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <label className="form-field">
                     <span>Transcript</span>
                     <textarea
+                      data-testid="feature1-transcript"
                       rows={8}
                       value={transcriptText}
-                      onChange={(event) => setTranscriptText(event.target.value)}
+                      onChange={(event) => {
+                        setTranscriptText(event.target.value);
+                        if (transcriptionPublicId) saveTranscript(transcriptionPublicId, event.target.value);
+                        setTranscriptionDetails((current) =>
+                          current
+                            ? {
+                              ...current,
+                              transcript: event.target.value,
+                            }
+                            : current
+                        );
+                      }}
                       placeholder="Paste transcript text here. Timestamped lines like 00:15 Hook line... work best."
                     />
                   </label>
@@ -930,7 +1384,12 @@ export function Feature1Page({ session }: Feature1PageProps) {
                     <button className="btn btn--ghost" type="button" onClick={() => setActiveCoreNode('generate')}>
                       Skip
                     </button>
-                    <button className="btn btn--primary" type="button" onClick={() => setActiveCoreNode('generate')}>
+                    <button
+                      className="btn btn--primary"
+                      type="button"
+                      onClick={() => setActiveCoreNode('generate')}
+                      data-testid="feature1-next-generate"
+                    >
                       Next: Generate →
                     </button>
                   </div>
@@ -951,11 +1410,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                   <div className="generate-summary">
                     <div className="generate-summary__item">
                       <span className="generate-summary__label">Source</span>
-                      <strong>
-                        {sourceMode === 'upload'
-                          ? sourceAsset?.label || 'Uploaded'
-                          : googleDriveUrl.trim() || 'Drive'}
-                      </strong>
+                      <strong>{sourceAsset?.label || 'No video'}</strong>
                     </div>
                     <div className="generate-summary__item">
                       <span className="generate-summary__label">Transcript</span>
@@ -969,13 +1424,89 @@ export function Feature1Page({ session }: Feature1PageProps) {
                       <span className="generate-summary__label">Output</span>
                       <strong>30–60s viral reels, ranked</strong>
                     </div>
+                    <div className="generate-summary__item">
+                      <span className="generate-summary__label">MediaPipe</span>
+                      <strong>
+                        {visualAnalysis?.highlights?.length
+                          ? `${visualAnalysis.highlights.length} expression peaks`
+                          : 'Expression scan on generate'}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="editing-blocks">
+                    <h3 className="editing-blocks__title">Editing Blocks</h3>
+                    <div className="editing-blocks__grid">
+                      <label className={`editing-block ${editRemoveSilences ? 'editing-block--on' : ''}`}>
+                        <div className="editing-block__icon">✂️</div>
+                        <div className="editing-block__info">
+                          <strong>Remove Silences</strong>
+                          <span>Cut dead air &amp; awkward pauses for fast pacing</span>
+                        </div>
+                        <div className="editing-block__toggle">
+                          <input type="checkbox" checked={editRemoveSilences} onChange={(e) => setEditRemoveSilences(e.target.checked)} />
+                          <span className="editing-block__slider" />
+                        </div>
+                      </label>
+
+                      <label className={`editing-block ${editShakingCaptions ? 'editing-block--on' : ''}`}>
+                        <div className="editing-block__icon">💥</div>
+                        <div className="editing-block__info">
+                          <strong>Shaking Captions</strong>
+                          <span>Bold, animated text that demands attention</span>
+                        </div>
+                        <div className="editing-block__toggle">
+                          <input type="checkbox" checked={editShakingCaptions} onChange={(e) => setEditShakingCaptions(e.target.checked)} />
+                          <span className="editing-block__slider" />
+                        </div>
+                      </label>
+
+                      <label className={`editing-block ${editFaceFocus ? 'editing-block--on' : ''}`}>
+                        <div className="editing-block__icon">🎯</div>
+                        <div className="editing-block__info">
+                          <strong>Face Focus</strong>
+                          <span>Track the active speaker instead of locking on the center face</span>
+                        </div>
+                        <div className="editing-block__toggle">
+                          <input type="checkbox" checked={editFaceFocus} onChange={(e) => setEditFaceFocus(e.target.checked)} />
+                          <span className="editing-block__slider" />
+                        </div>
+                      </label>
+
+                      <label className={`editing-block ${editSafeFaceFrame ? 'editing-block--on' : ''}`}>
+                        <div className="editing-block__icon">🧍</div>
+                        <div className="editing-block__info">
+                          <strong>Safe Face Frame</strong>
+                          <span>Pad the final 9:16 render so the speaker’s full face stays visible</span>
+                        </div>
+                        <div className="editing-block__toggle">
+                          <input type="checkbox" checked={editSafeFaceFrame} onChange={(e) => setEditSafeFaceFrame(e.target.checked)} />
+                          <span className="editing-block__slider" />
+                        </div>
+                      </label>
+                    </div>
                   </div>
 
                   {isGenerating ? (
                     <div className="generating-state">
                       <div className="generating-state__spinner" />
-                      <h2>Generating your reels...</h2>
-                      <p>Analyzing video, extracting clips, ranking by virality.</p>
+                      <h2>{GENERATE_STAGES[generateStage]?.label || 'Processing…'}</h2>
+                      <div className="generating-state__progress">
+                        <div
+                          className="generating-state__bar"
+                          style={{ width: `${((generateStage + 1) / GENERATE_STAGES.length) * 100}%` }}
+                        />
+                      </div>
+                      <div className="generating-state__steps">
+                        {GENERATE_STAGES.map((stage, i) => (
+                          <span
+                            key={stage.label}
+                            className={`generating-state__step ${i <= generateStage ? 'generating-state__step--done' : ''}`}
+                          >
+                            {i < generateStage ? '✓' : i === generateStage ? '●' : '○'} {stage.label.replace('…', '')}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   ) : (
                     <div className="generate-cta">
@@ -983,6 +1514,8 @@ export function Feature1Page({ session }: Feature1PageProps) {
                         className="btn btn--primary btn--xl generate-button"
                         type="button"
                         onClick={() => void handleGenerate()}
+                        disabled={isGenerating || !hasSource}
+                        data-testid="feature1-generate"
                       >
                         ⚡ Generate Reels
                       </button>
@@ -1006,113 +1539,302 @@ export function Feature1Page({ session }: Feature1PageProps) {
           }
 
           {
-            activeCoreNode === 'results' && result && (
-              <div className="flow-panel__content" key="results">
+            activeCoreNode === 'hook-filter' && result && (
+              <div className="flow-panel__content" key="hook-filter">
                 <div className="flow-panel__header">
-                  <h2>Your Reels Are Ready 🎉</h2>
-                  <p>{result.clips.length} reels ranked by virality score.</p>
+                  <h2>🪝 Review Hooks</h2>
+                  <p>Toggle clips on/off. Only enabled clips move to Results.</p>
                 </div>
 
                 <div className="flow-panel__body">
-                  <div className="reel-results__summary">
-                    <span className="reel-results__pill reel-results__pill--active">
-                      {result.clips.length} reels
+                  <div className="hook-filter__summary">
+                    <span className="hook-filter__count">
+                      {filteredClipIds.size} of {result.clips.length} clips enabled
                     </span>
-                    <span className="reel-results__pill">
-                      Transcript: {result.transcriptUsed ? 'used' : 'off'}
-                    </span>
-                    <span className="reel-results__pill">
-                      Visual: {result.visualSignalsUsed ? 'used' : 'off'}
-                    </span>
+                    <button
+                      className="btn btn--ghost btn--sm"
+                      type="button"
+                      onClick={() =>
+                        setFilteredClipIds(
+                          filteredClipIds.size === result.clips.length
+                            ? new Set()
+                            : new Set(result.clips.map((c) => c.id))
+                        )
+                      }
+                    >
+                      {filteredClipIds.size === result.clips.length ? 'Deselect All' : 'Select All'}
+                    </button>
                   </div>
 
-                  <div className="reel-grid">
+                  <div className="hook-filter__list">
                     {result.clips.map((clip) => {
-                      const recommended = clip.id === result.recommendedClipId;
+                      const enabled = filteredClipIds.has(clip.id);
+                      const hookScore = clip.scoreBreakdown.hookStrength;
                       return (
-                        <article className="reel-card" key={clip.id}>
-                          <div className="reel-card__media">
-                            {recommended && <span className="reel-card__badge">⭐ Recommended</span>}
+                        <div
+                          key={clip.id}
+                          className={`hook-filter__card ${enabled ? 'hook-filter__card--enabled' : 'hook-filter__card--disabled'}`}
+                        >
+                          <button
+                            type="button"
+                            className="hook-filter__toggle"
+                            onClick={() => toggleClipFilter(clip.id)}
+                          >
+                            <span className={`hook-filter__check ${enabled ? 'hook-filter__check--on' : ''}`}>
+                              {enabled ? '✓' : ''}
+                            </span>
+                          </button>
+
+                          <div className="hook-filter__preview">
                             <video
-                              className="reel-card__video"
-                              controls
+                              className="hook-filter__video"
+                              muted
                               playsInline
                               preload="metadata"
                               poster={clip.posterUrl}
                               src={clip.deliveryUrl}
+                              onMouseEnter={(e) => {
+                                const v = e.currentTarget;
+                                v.currentTime = 0;
+                                v.play().catch(() => { });
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.pause();
+                                e.currentTarget.currentTime = 0;
+                              }}
                             />
                           </div>
-                          <div className="reel-card__body">
-                            <div className="reel-card__header">
-                              <div>
-                                <strong>
-                                  #{clip.rank} · {clip.title}
-                                </strong>
-                                <span>
-                                  {formatTime(clip.startOffset)} start · {clip.duration}s ·{' '}
-                                  {clip.analysisSource}
-                                </span>
-                              </div>
-                              <div className="reel-score">
-                                <span>Virality</span>
-                                <strong>{formatScore(clip.viralityScore)}</strong>
-                              </div>
+
+                          <div className="hook-filter__info">
+                            <div className="hook-filter__rank">
+                              #{clip.rank}
+                              {hookScore >= 70 && <span className="hook-fire">🔥</span>}
                             </div>
-                            <p className="reel-hook">{clip.hook}</p>
-                            {clip.transcriptExcerpt && (
-                              <p className="reel-excerpt">{clip.transcriptExcerpt}</p>
-                            )}
-                            <div className="reel-card__actions">
-                              <a className="btn btn--primary btn--sm" href={clip.downloadUrl} download>
-                                ⬇ Download
-                              </a>
-                              <a
-                                className="btn btn--ghost btn--sm"
-                                href={clip.deliveryUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                Open
-                              </a>
-                            </div>
-                            <div className="reel-breakdown">
-                              <span>Hook {formatScore(clip.scoreBreakdown.hookStrength)}</span>
-                              <span>Clarity {formatScore(clip.scoreBreakdown.standaloneClarity)}</span>
-                              <span>Emotion {formatScore(clip.scoreBreakdown.emotionalImpact)}</span>
-                              <span>Novelty {formatScore(clip.scoreBreakdown.novelty)}</span>
-                              <span>Pacing {formatScore(clip.scoreBreakdown.pacing)}</span>
-                              <span>Visuals {formatScore(clip.scoreBreakdown.visualEngagement)}</span>
-                            </div>
-                            <div className="reel-columns">
-                              <div>
-                                <h3>Why it ranked</h3>
-                                <ul>
-                                  {clip.reasoning.map((item) => (
-                                    <li key={item}>{item}</li>
-                                  ))}
-                                </ul>
+                            <p className="hook-filter__hook-text">"{clip.hook}"</p>
+                              {clip.expressionLabel ? (
+                                <div className="reel-card-v2__expression reel-card-v2__expression--compact">
+                                  <span>🎯 {clip.focusStrategy || 'speaker'} · {clip.expressionLabel}</span>
+                                  {clip.cameraMotion ? <strong>{clip.cameraMotion}</strong> : null}
+                                </div>
+                              ) : null}
+                            <div className="hook-filter__meter">
+                              <div className="hook-filter__meter-label">
+                                <span>Hook Strength</span>
+                                <strong>{formatScore(hookScore)}</strong>
                               </div>
-                              <div>
-                                <h3>Editing plan</h3>
-                                <ul>
-                                  {clip.editingPlan.map((item) => (
-                                    <li key={item}>{item}</li>
-                                  ))}
-                                </ul>
+                              <div className="hook-filter__meter-bar">
+                                <div
+                                  className="hook-filter__meter-fill"
+                                  style={{
+                                    width: `${hookScore}%`,
+                                    background: hookScore >= 70
+                                      ? 'linear-gradient(90deg, #10b981, #34d399)'
+                                      : hookScore >= 50
+                                        ? 'linear-gradient(90deg, #f59e0b, #fbbf24)'
+                                        : 'linear-gradient(90deg, #ef4444, #f87171)',
+                                  }}
+                                />
                               </div>
                             </div>
+                            <span className="hook-filter__time">
+                              {formatTime(clip.startOffset)} · {clip.duration}s · {clip.analysisSource}
+                            </span>
                           </div>
-                        </article>
+                        </div>
                       );
                     })}
                   </div>
                 </div>
 
                 <div className="flow-panel__nav">
-                  <button className="btn btn--ghost" type="button" onClick={handleStartNew}>
-                    ← Start New
+                  <button
+                    className="btn btn--ghost"
+                    type="button"
+                    onClick={() => setActiveCoreNode('generate')}
+                  >
+                    ← Back
                   </button>
-                  <div />
+                  <button
+                    className="btn btn--primary"
+                    type="button"
+                    onClick={() => setActiveCoreNode('results')}
+                    disabled={filteredClipIds.size === 0}
+                    data-testid="feature1-view-results"
+                  >
+                    View Results ({filteredClipIds.size}) →
+                  </button>
+                </div>
+              </div>
+            )
+          }
+
+          {
+            activeCoreNode === 'results' && result && (
+              <div className="flow-panel__content" key="results">
+                <div className="flow-panel__header">
+                  <h2>Your Reels Are Ready 🎉</h2>
+                  <p>
+                    {result.clips.filter((c) => filteredClipIds.has(c.id)).length} reels ranked by virality score.
+                  </p>
+                </div>
+
+                <div className="flow-panel__body">
+                  <div className="reel-results__summary">
+                    <span className="reel-results__pill reel-results__pill--active">
+                      {result.clips.filter((c) => filteredClipIds.has(c.id)).length} reels
+                    </span>
+                    <span className="reel-results__pill">
+                      Transcript: {result.transcriptUsed ? 'used' : 'off'}
+                    </span>
+                    <span className="reel-results__pill">
+                      Visual: {result.visualSignalsUsed ? 'MediaPipe' : 'off'}
+                    </span>
+                    {result.clips.some((clip) => clip.qa) ? (
+                      <span className="reel-results__pill">
+                        QA: {result.clips.filter((clip) => clip.qa?.status === 'pass').length}/{result.clips.length} pass
+                      </span>
+                    ) : null}
+                    {result.visualAnalysis?.highlights?.length ? (
+                      <span className="reel-results__pill">
+                        Expressions: {result.visualAnalysis.highlights.length} peaks
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="reel-grid-v2">
+                    {result.clips
+                      .filter((c) => filteredClipIds.has(c.id))
+                      .map((clip, idx) => {
+                        const recommended = clip.id === result.recommendedClipId;
+                        const isTop = idx === 0;
+                        const scorePercent = Math.round(clip.viralityScore);
+                        const circumference = 2 * Math.PI * 38;
+                        const strokeOffset = circumference - (scorePercent / 100) * circumference;
+
+                        return (
+                          <article
+                            className={`reel-card-v2 ${isTop ? 'reel-card-v2--top' : ''}`}
+                            key={clip.id}
+                            data-testid="feature1-reel-card"
+                          >
+                            <div className="reel-card-v2__phone">
+                              {recommended && <span className="reel-card-v2__badge">⭐ Best</span>}
+                              {isTop && <span className="reel-card-v2__fire">🔥</span>}
+                              <FaceDetectVideo
+                                src={clip.previewUrl || clip.aiPreviewUrl || clip.deliveryUrl}
+                                poster={clip.posterUrl}
+                                faceFocusEnabled={editFaceFocus}
+                                captions={clipCaptionMap.get(clip.id) || []}
+                                captionsEnabled={Boolean(clipCaptionMap.get(clip.id)?.length)}
+                                captionVariant={editShakingCaptions ? 'shaking' : 'clean'}
+                                focusStrategy={clip.focusStrategy}
+                                cameraMotion={clip.cameraMotion}
+                              />
+                            </div>
+
+                            <div className="reel-card-v2__body">
+                              <div className="reel-card-v2__top-row">
+                                <div className="reel-card-v2__title">
+                                  <strong>#{clip.rank} · {clip.title}</strong>
+                                  <span className="reel-card-v2__meta">
+                                    {formatTime(clip.startOffset)} · {clip.duration}s
+                                  </span>
+                                </div>
+
+                                <div className="reel-score-ring">
+                                  <svg viewBox="0 0 88 88" className="reel-score-ring__svg">
+                                    <circle cx="44" cy="44" r="38" className="reel-score-ring__bg" />
+                                    <circle
+                                      cx="44"
+                                      cy="44"
+                                      r="38"
+                                      className="reel-score-ring__fill"
+                                      strokeDasharray={circumference}
+                                      strokeDashoffset={strokeOffset}
+                                      style={{
+                                        stroke: scorePercent >= 70
+                                          ? '#10b981'
+                                          : scorePercent >= 50
+                                            ? '#f59e0b'
+                                            : '#ef4444',
+                                      }}
+                                    />
+                                  </svg>
+                                  <span className="reel-score-ring__value">{scorePercent}</span>
+                                </div>
+                              </div>
+
+                              <p className="reel-card-v2__hook">"{clip.hook}"</p>
+
+                              {clip.expressionLabel ? (
+                                <div className="reel-card-v2__expression">
+                                  <span>
+                                    😀 {clip.expressionLabel}
+                                    {clip.focusStrategy ? ` · ${clip.focusStrategy}` : ''}
+                                  </span>
+                                  {clip.cameraMotion ? <em>{clip.cameraMotion}</em> : null}
+                                  {clip.expressionScore ? <strong>{formatScore(clip.expressionScore)}</strong> : null}
+                                </div>
+                              ) : null}
+
+                              {clip.qa ? (
+                                <div
+                                  className={`reel-card-v2__qa reel-card-v2__qa--${clip.qa.status}`}
+                                  data-testid="feature1-reel-qa"
+                                >
+                                  <span>
+                                    {clip.qa.status === 'pass' ? 'QA passed' : 'QA review'}
+                                    {` · face ${Math.round(clip.qa.speakerFaceVisibleRatio * 100)}%`}
+                                  </span>
+                                  <small>{clip.qa.notes[0]}</small>
+                                </div>
+                              ) : null}
+
+                              {clip.transcriptExcerpt && (
+                                <p className="reel-card-v2__excerpt">{clip.transcriptExcerpt}</p>
+                              )}
+
+                              <div className="reel-card-v2__scores">
+                                <span>Hook {formatScore(clip.scoreBreakdown.hookStrength)}</span>
+                                <span>Clarity {formatScore(clip.scoreBreakdown.standaloneClarity)}</span>
+                                <span>Emotion {formatScore(clip.scoreBreakdown.emotionalImpact)}</span>
+                                <span>Pacing {formatScore(clip.scoreBreakdown.pacing)}</span>
+                              </div>
+
+                              <div className="reel-card-v2__actions">
+                                <a className="btn btn--primary btn--sm" href={clip.downloadUrl} download>
+                                  ⬇ Download
+                                </a>
+                                <a
+                                  className="btn btn--ghost btn--sm"
+                                  href={clip.deliveryUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  ↗ Open
+                                </a>
+                                <button
+                                  className="btn btn--ghost btn--sm"
+                                  type="button"
+                                  onClick={() => navigator.clipboard?.writeText(clip.deliveryUrl)}
+                                >
+                                  📋 Copy Link
+                                </button>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                  </div>
+                </div>
+
+                <div className="flow-panel__nav">
+                  <button className="btn btn--ghost" type="button" onClick={() => setActiveCoreNode('hook-filter')}>
+                    ← Filter Hooks
+                  </button>
+                  <button className="btn btn--ghost" type="button" onClick={handleStartNew}>
+                    Start New
+                  </button>
                 </div>
               </div>
             )
@@ -1145,7 +1867,10 @@ export function Feature1Page({ session }: Feature1PageProps) {
                         type="button"
                         onClick={() => {
                           setResult(entry.result);
+                          setVisualAnalysis(entry.result.visualAnalysis ?? null);
+                          setFilteredClipIds(new Set(entry.result.clips.map((clip) => clip.id)));
                           setActiveCoreNode('results');
+                          setStatusMessage(`Loaded ${entry.result.clips.length} saved reels.`);
                         }}
                       >
                         View
