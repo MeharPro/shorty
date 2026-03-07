@@ -51,7 +51,7 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
 
       onAuth(createShortySession(trimmedEmail, isSignup ? name : undefined));
       setPassword('');
-      navigate('/');
+      navigate('/app');
     } finally {
       setIsSubmitting(false);
     }

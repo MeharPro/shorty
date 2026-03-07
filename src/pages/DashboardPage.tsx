@@ -54,7 +54,7 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
     <div className="dashboard">
       {/* Header */}
       <header className="dashboard__header">
-        <Link className="dashboard__brand" to="/">
+        <Link className="dashboard__brand" to="/app">
           <span className="dashboard__brand-mark">
             <img alt="Shorty" src={boltLogo} />
           </span>
