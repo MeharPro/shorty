@@ -555,3 +555,30 @@ Right now this app is best described as:
 It is **not yet** a full automated AI video editor.
 
 That is deliberate. The current build establishes the correct product direction and sponsor architecture first.
+
+## 22. Multi-Codex Coordination
+
+There is no native live Codex-to-Codex chat channel, so this repo now includes a lightweight coordination layer.
+
+Shared docs:
+
+- [`docs/DECISIONS.md`](/Users/meharkhanna/yt-shortmaker/docs/DECISIONS.md)
+- [`docs/HANDOFF.md`](/Users/meharkhanna/yt-shortmaker/docs/HANDOFF.md)
+- [`docs/TASKS.md`](/Users/meharkhanna/yt-shortmaker/docs/TASKS.md)
+
+Quick message log:
+
+- [`.coordination/messages.tsv`](/Users/meharkhanna/yt-shortmaker/.coordination/messages.tsv)
+
+Scripts:
+
+- [`scripts/chat-send.sh`](/Users/meharkhanna/yt-shortmaker/scripts/chat-send.sh)
+- [`scripts/chat-watch.sh`](/Users/meharkhanna/yt-shortmaker/scripts/chat-watch.sh)
+
+Example usage:
+
+```bash
+scripts/chat-watch.sh
+scripts/chat-send.sh "Starting work on captions"
+scripts/chat-send.sh -a codex-brother -b codex/captions "Touching src/lib/rendering.ts"
+```
