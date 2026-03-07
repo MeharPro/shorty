@@ -1,7 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import boltLogo from '../assets/bolt-logo.png';
-import type { ShortySession } from '../lib/session';
+import { createShortySession, type ShortySession } from '../lib/session';
+import {
+  hasSupabaseBrowserConfig,
+  signInWithEmail,
+  signUpWithEmail,
+} from '../lib/supabase';
 
 interface AuthPageProps {
   mode: 'login' | 'signup';
@@ -13,25 +18,42 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isSignup = mode === 'signup';
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     const trimmedEmail = email.trim();
-    if (!trimmedEmail) {
+    const trimmedPassword = password.trim();
+    if (!trimmedEmail || !trimmedPassword) {
+      setAuthMessage('Email and password are required.');
       return;
     }
 
-    const fallbackName = trimmedEmail.split('@')[0] || 'Creator';
-    onAuth({
-      name: isSignup ? (name.trim() || fallbackName) : fallbackName,
-      email: trimmedEmail,
-    });
+    setIsSubmitting(true);
+    setAuthMessage('');
 
-    setPassword('');
-    navigate('/dashboard');
+    try {
+      if (hasSupabaseBrowserConfig) {
+        const result = isSignup
+          ? await signUpWithEmail(trimmedEmail, trimmedPassword)
+          : await signInWithEmail(trimmedEmail, trimmedPassword);
+
+        if (!result.ok) {
+          setAuthMessage(result.message);
+          return;
+        }
+      }
+
+      onAuth(createShortySession(trimmedEmail, isSignup ? name : undefined));
+      setPassword('');
+      navigate('/dashboard');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -59,8 +81,9 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
           <span className="shorty-home-panel__eyebrow">{isSignup ? 'Signup' : 'Login'}</span>
           <h1>{isSignup ? 'Create a workspace identity.' : 'Return to the dashboard.'}</h1>
           <p>
-            This local auth flow only stores a lightweight workspace identity so you can move
-            through the app cleanly while the real backend is still being built.
+            {hasSupabaseBrowserConfig
+              ? 'Supabase auth is configured, so these screens now use the live email flow from the dev branch.'
+              : 'Supabase is not configured, so this page falls back to a local workspace identity.'}
           </p>
 
           <ul className="shorty-auth-points">
@@ -74,7 +97,11 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
           <form className="shorty-auth-form" onSubmit={handleSubmit}>
             <div className="shorty-auth-form__header">
               <strong>{isSignup ? 'Create account' : 'Sign in'}</strong>
-              <span>{isSignup ? 'Need access to the dashboard.' : 'Use any email locally.'}</span>
+              <span>
+                {hasSupabaseBrowserConfig
+                  ? 'Uses Supabase auth when env vars are present.'
+                  : 'Uses local fallback when auth env vars are missing.'}
+              </span>
             </div>
 
             {isSignup ? (
@@ -111,9 +138,11 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
               />
             </label>
 
-            <button className="shorty-button shorty-button--solid" type="submit">
-              {isSignup ? 'Create account' : 'Sign in'}
+            <button className="shorty-button shorty-button--solid" disabled={isSubmitting} type="submit">
+              {isSubmitting ? 'Working...' : isSignup ? 'Create account' : 'Sign in'}
             </button>
+
+            {authMessage ? <p className="shorty-auth-form__message">{authMessage}</p> : null}
 
             <p className="shorty-auth-form__switch">
               {isSignup ? 'Already have a workspace?' : 'Need a workspace?'}{' '}

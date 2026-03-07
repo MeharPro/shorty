@@ -41,7 +41,7 @@ const DEFAULT_DRAFT: CreatorDraft = {
 
 interface DashboardPageProps {
   session: ShortySession | null;
-  onLogout: () => void;
+  onLogout: () => Promise<void>;
 }
 
 export function DashboardPage({ session, onLogout }: DashboardPageProps) {
@@ -53,6 +53,7 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [remoteGameplayUrl, setRemoteGameplayUrl] = useState('');
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const deferredDraft = useDeferredValue(draft);
   const storyPreset =
@@ -137,6 +138,15 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
     }, 2000);
   };
 
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await onLogout();
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
+
   return (
     <div className="shorty-shell">
       <header className="shorty-topbar">
@@ -164,8 +174,13 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
             <strong>{session?.name ?? 'Guest workspace'}</strong>
             <span>{session?.email ?? 'Local dashboard access'}</span>
           </div>
-          <button className="shorty-button shorty-button--ghost" type="button" onClick={onLogout}>
-            Clear session
+          <button
+            className="shorty-button shorty-button--ghost"
+            disabled={isLoggingOut}
+            type="button"
+            onClick={() => void handleLogout()}
+          >
+            {isLoggingOut ? 'Clearing...' : 'Clear session'}
           </button>
         </div>
       </header>
