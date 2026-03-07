@@ -1,7 +1,67 @@
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  width: min(560px, calc(100vw - 40px));
+  margin: 0 auto;
+  padding: 40px 0;
+}
+
+.auth-card {
+  width: 100%;
+  border-radius: 28px;
+  padding: 32px;
+  backdrop-filter: blur(18px);
+  background: rgba(11, 15, 27, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
+}
+
+.auth-card h1 {
+  margin: 0;
+  font-family: 'Sora', sans-serif;
+  font-size: clamp(2rem, 4vw, 2.6rem);
+  line-height: 1;
+}
+
+.auth-form {
+  margin-top: 20px;
+  display: grid;
+  gap: 14px;
+}
+
+.auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.auth-actions .button {
+  width: fit-content;
+}
+
+.auth-message {
+  margin: 14px 0 0;
+  color: rgba(242, 239, 230, 0.78);
+  line-height: 1.5;
+}
+
 .app-shell {
   width: min(1480px, calc(100vw - 40px));
   margin: 0 auto;
   padding: 40px 0 64px;
+}
+
+.session-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.session-bar span {
+  color: rgba(242, 239, 230, 0.72);
 }
 
 .hero {
@@ -726,6 +786,21 @@
 }
 
 @media (max-width: 720px) {
+  .auth-shell {
+    width: min(100vw - 24px, 100%);
+    padding-top: 24px;
+  }
+
+  .auth-card {
+    padding: 20px;
+    border-radius: 22px;
+  }
+
+  .session-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .app-shell {
     width: min(100vw - 24px, 100%);
     padding-top: 24px;
