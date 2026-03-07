@@ -291,7 +291,7 @@ export function ReelGeneratorPanel({
                       playsInline
                       preload="metadata"
                       poster={clip.posterUrl}
-                      src={clip.deliveryUrl}
+                      src={clip.previewUrl || clip.deliveryUrl}
                     />
                   </div>
 

@@ -101,6 +101,66 @@ export interface ReelScoreBreakdown {
   insightDensity: number;
 }
 
+export interface VisualHighlight {
+  id: string;
+  start: number;
+  end: number;
+  score: number;
+  label: string;
+  dominantExpression: 'smile' | 'surprise' | 'emphasis' | 'engagement';
+  faceCount: number;
+  focusStrategy?: 'speaker' | 'reaction' | 'group';
+  cameraMotion?: 'steady' | 'dynamic' | 'shake';
+  metrics: {
+    smile: number;
+    surprise: number;
+    emphasis: number;
+    engagement: number;
+    groupEnergy?: number;
+  };
+}
+
+export interface VisualAnalysisSummary {
+  provider: 'mediapipe-face-landmarker';
+  sourcePublicId?: string;
+  sourceUrl?: string;
+  analyzedDuration: number;
+  sampleCount: number;
+  averageScore: number;
+  peakScore: number;
+  highlights: VisualHighlight[];
+  generatedAt: string;
+}
+
+export interface ReelQualityAudit {
+  status: 'pass' | 'warn';
+  samples: number;
+  framesWithFaces: number;
+  speakerFaceVisibleRatio: number;
+  notes: string[];
+}
+
+export interface Feature1EditingAdvice {
+  removeSilences?: boolean;
+  shakingCaptions?: boolean;
+  faceFocus?: boolean;
+  safeFaceFrame?: boolean;
+  qaEnabled?: boolean;
+  focusPreference?: 'auto' | 'speaker' | 'reaction' | 'group';
+  cameraMotionPreference?: 'auto' | 'steady' | 'dynamic' | 'shake';
+  captionDensity?: 'tight' | 'balanced';
+  viralStyle?: 'balanced' | 'aggressive';
+}
+
+export interface Feature1AgentPlan {
+  model: string;
+  summary: string;
+  editingOptions: Feature1EditingAdvice;
+  logicBlocks: string[];
+  qaChecks: string[];
+  notes: string[];
+}
+
 export interface ReelCandidate {
   id: string;
   rank: number;
@@ -114,11 +174,40 @@ export interface ReelCandidate {
   scoreBreakdown: ReelScoreBreakdown;
   reasoning: string[];
   editingPlan: string[];
-  analysisSource: 'transcript' | 'visual';
+  analysisSource: 'transcript' | 'visual' | 'hybrid';
+  expressionLabel?: string;
+  expressionScore?: number;
+  focusStrategy?: 'speaker' | 'reaction' | 'group';
+  cameraMotion?: 'steady' | 'dynamic' | 'shake';
+  previewUrl: string;
   deliveryUrl: string;
   posterUrl: string;
   downloadUrl: string;
   aiPreviewUrl: string | null;
+  qa?: ReelQualityAudit | null;
+}
+
+export interface TranscriptWord {
+  word: string;
+  start: number;
+  end: number;
+}
+
+export interface TranscriptSegment {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+  confidence?: number;
+  words: TranscriptWord[];
+}
+
+export interface CaptionCue {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+  words: TranscriptWord[];
 }
 
 export interface ReelGenerationResponse {
@@ -131,6 +220,7 @@ export interface ReelGenerationResponse {
   };
   transcriptUsed: boolean;
   visualSignalsUsed: boolean;
+  visualAnalysis?: VisualAnalysisSummary;
   recommendedClipId: string | null;
   clips: ReelCandidate[];
 }
@@ -147,6 +237,9 @@ export interface VideoTranscriptionResponse {
   transcript: string;
   provider: string;
   model: string;
+  publicId?: string;
   sourceUrl: string;
+  transcriptUrl?: string;
+  segments?: TranscriptSegment[];
   generatedAt: string;
 }

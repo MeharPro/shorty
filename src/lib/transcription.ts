@@ -3,9 +3,13 @@ import type { MediaAsset, VideoTranscriptionResponse } from '../types';
 export async function transcribeVideo({
   sourceAsset,
   googleDriveUrl,
+  publicId,
+  language,
 }: {
   sourceAsset?: MediaAsset | null;
   googleDriveUrl?: string;
+  publicId?: string;
+  language?: string;
 }): Promise<VideoTranscriptionResponse> {
   const response = await fetch('/api/transcribe-video', {
     method: 'POST',
@@ -15,6 +19,8 @@ export async function transcribeVideo({
     body: JSON.stringify({
       sourceAsset,
       googleDriveUrl,
+      publicId,
+      language,
     }),
   });
 
