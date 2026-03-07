@@ -60,7 +60,7 @@ export function UploadWidget({
   resourceType = 'auto',
   clientAllowedFormats,
   sources = ['local', 'camera', 'url'],
-  folder = 'yt-shortmaker',
+  folder = 'shorty',
   multiple = false,
 }: UploadWidgetProps) {
   const widgetRef = useRef<{ open: () => void } | null>(null);

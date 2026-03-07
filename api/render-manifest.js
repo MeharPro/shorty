@@ -29,6 +29,14 @@ function isRemoteAsset(asset) {
   return asset?.strategy === 'remote-fetch' || asset?.source === 'remote';
 }
 
+function buildSourceVideo(cld, sourceAsset, sourcePublicId) {
+  if (sourceAsset && isRemoteAsset(sourceAsset) && sourceAsset.secureUrl) {
+    return cld.video(sourceAsset.secureUrl).setDeliveryType('fetch');
+  }
+
+  return cld.video(sourcePublicId);
+}
+
 function buildGameplayOverlay(asset, platform) {
   const overlayTransform = new Transformation().resize(
     fill()
@@ -44,9 +52,16 @@ function buildGameplayOverlay(asset, platform) {
   return source(gameplaySource).position(new Position().gravity(compass('south')));
 }
 
-function buildRenderableVideo(cld, sourcePublicId, clipDuration, startOffset, platform, gameplayAsset) {
-  const render = cld
-    .video(sourcePublicId)
+function buildRenderableVideo(
+  cld,
+  sourceAsset,
+  sourcePublicId,
+  clipDuration,
+  startOffset,
+  platform,
+  gameplayAsset
+) {
+  const render = buildSourceVideo(cld, sourceAsset, sourcePublicId)
     .videoEdit(trim().startOffset(startOffset).duration(clipDuration))
     .resize(
       fill()
@@ -62,9 +77,18 @@ function buildRenderableVideo(cld, sourcePublicId, clipDuration, startOffset, pl
   return render;
 }
 
-function buildDeliveryUrl(cld, sourcePublicId, clipDuration, startOffset, platform, gameplayAsset) {
+function buildDeliveryUrl(
+  cld,
+  sourceAsset,
+  sourcePublicId,
+  clipDuration,
+  startOffset,
+  platform,
+  gameplayAsset
+) {
   return buildRenderableVideo(
     cld,
+    sourceAsset,
     sourcePublicId,
     clipDuration,
     startOffset,
@@ -76,9 +100,8 @@ function buildDeliveryUrl(cld, sourcePublicId, clipDuration, startOffset, platfo
     .toURL();
 }
 
-function buildAiPreviewUrl(cld, publicId, clipDuration, platform) {
-  return cld
-    .video(publicId)
+function buildAiPreviewUrl(cld, sourceAsset, publicId, clipDuration, platform) {
+  return buildSourceVideo(cld, sourceAsset, publicId)
     .videoEdit(
       preview()
         .duration(clipDuration)
@@ -114,7 +137,8 @@ export default function handler(req, res) {
     cloud: { cloudName },
   });
 
-  const sourcePublicId = body.publicId || body.sourceAsset?.publicId || 'dog';
+  const sourceAsset = body.sourceAsset ?? null;
+  const sourcePublicId = body.publicId || sourceAsset?.publicId || 'dog';
   const clipDuration = Number(body.clipDuration || body.settings?.clipDuration || 15);
   const startOffset = Number(body.startOffset || body.settings?.startOffset || 0);
   const useAiPreview = Boolean(body.useAiPreview ?? body.settings?.useAiPreview);
@@ -134,6 +158,7 @@ export default function handler(req, res) {
       platformId: platform.id,
       deliveryUrl: buildDeliveryUrl(
         cld,
+        sourceAsset,
         sourcePublicId,
         clipDuration,
         startOffset,
@@ -141,7 +166,7 @@ export default function handler(req, res) {
         gameplayAsset
       ),
       aiPreviewUrl: useAiPreview
-        ? buildAiPreviewUrl(cld, sourcePublicId, clipDuration, platform)
+        ? buildAiPreviewUrl(cld, sourceAsset, sourcePublicId, clipDuration, platform)
         : null,
       compositionMode: gameplayAsset ? 'gameplay-stack' : 'single',
     }));

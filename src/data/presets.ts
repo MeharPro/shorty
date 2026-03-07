@@ -41,28 +41,28 @@ export const PLATFORM_PRESETS: PlatformPreset[] = [
 export const CAPTION_THEMES: CaptionTheme[] = [
   {
     id: 'impact',
-    label: 'Impact',
-    description: 'Bold, all-caps emphasis for high-energy social hooks.',
-    accentVar: '--accent-sun',
+    label: 'Signal',
+    description: 'Bold, high-pressure emphasis for hard opens and fast hooks.',
+    accentVar: '--accent-red',
   },
   {
     id: 'clean-room',
-    label: 'Clean Room',
-    description: 'Minimal lower-third styling for product demos and explainers.',
-    accentVar: '--accent-sky',
+    label: 'Monochrome',
+    description: 'Minimal subtitle blocks for explainers, product clips, and deadpan edits.',
+    accentVar: '--text-strong',
   },
   {
     id: 'night-shift',
-    label: 'Night Shift',
-    description: 'Dark translucent treatment for gameplay and creator commentary.',
-    accentVar: '--accent-mint',
+    label: 'Afterburn',
+    description: 'Dark caption treatment for commentary, reactions, and gameplay stacks.',
+    accentVar: '--accent-orange',
   },
 ];
 
 export const STORY_PRESETS: StoryPreset[] = [
   {
     id: 'clip-commander',
-    label: 'Clip Commander',
+    label: 'Shorty Cut',
     description: 'Turn a long-form talking-head or tutorial clip into a vertical recap with bold captions.',
     challengeFit: 'Best for tutorials, explainers, and direct-to-camera recaps.',
     defaults: {
@@ -78,7 +78,7 @@ export const STORY_PRESETS: StoryPreset[] = [
   },
   {
     id: 'launch-loop',
-    label: 'Launch Loop',
+    label: 'Shorty Launch',
     description: 'Package a product demo or founder update into a polished Reel with a strong CTA.',
     challengeFit: 'Best for product teasers, launch clips, and announcement reels.',
     defaults: {
@@ -94,7 +94,7 @@ export const STORY_PRESETS: StoryPreset[] = [
   },
   {
     id: 'gameplay-stack',
-    label: 'Gameplay Stack',
+    label: 'Shorty Stack',
     description: 'Layer creator narration over a gameplay bed and export a creator-friendly vertical template.',
     challengeFit: 'Best for reactions, commentary, and gameplay-backed vertical edits.',
     defaults: {
@@ -112,20 +112,20 @@ export const STORY_PRESETS: StoryPreset[] = [
 
 export const SAMPLE_PRIMARY_ASSET: MediaAsset = {
   id: 'sample-dog',
-  label: 'Sample Source Clip',
-  publicId: 'dog',
+  label: 'Built-In Source Clip',
+  publicId: '',
   secureUrl: 'https://res.cloudinary.com/demo/video/upload/f_auto/q_auto/dog.mp4',
   source: 'sample',
-  strategy: 'cloudinary-public-id',
+  strategy: 'remote-fetch',
   resourceType: 'video',
 };
 
 export const SAMPLE_GAMEPLAY_ASSET: MediaAsset = {
   id: 'sample-sea-turtle',
-  label: 'Sample Gameplay Bed',
-  publicId: 'samples/sea-turtle',
+  label: 'Built-In Gameplay Clip',
+  publicId: '',
   secureUrl: 'https://res.cloudinary.com/demo/video/upload/f_auto/q_auto/samples/sea-turtle.mp4',
   source: 'sample',
-  strategy: 'cloudinary-public-id',
+  strategy: 'remote-fetch',
   resourceType: 'video',
 };

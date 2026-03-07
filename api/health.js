@@ -1,6 +1,6 @@
 export default function handler(_req, res) {
   res.status(200).json({
-    app: 'yt-shortmaker',
+    app: 'shorty',
     cloudinary: {
       cloudName:
         process.env.CLOUDINARY_CLOUD_NAME ||

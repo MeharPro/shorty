@@ -94,14 +94,21 @@ function buildGameplayOverlay(asset: MediaAsset, platform: PlatformPreset) {
   return source(gameplaySource).position(new Position().gravity(compass('south')));
 }
 
+function createBaseVideo(asset: MediaAsset) {
+  if (isRemoteAsset(asset)) {
+    return cld.video(asset.secureUrl).setDeliveryType('fetch');
+  }
+
+  return cld.video(asset.publicId);
+}
+
 function buildRenderableVideo(
   sourceAsset: MediaAsset,
   gameplayAsset: MediaAsset | null,
   draft: CreatorDraft,
   platform: PlatformPreset
 ) {
-  const render = cld
-    .video(sourceAsset.publicId)
+  const render = createBaseVideo(sourceAsset)
     .videoEdit(trim().startOffset(draft.startOffset).duration(draft.clipDuration))
     .resize(
       fill()
@@ -125,8 +132,7 @@ function buildPosterUrl(
 ): string {
   if (draft.includeGameplay && gameplayAsset && isRemoteAsset(gameplayAsset)) {
     // Remote fetch layers can be slower to materialize; keep previews responsive.
-    return cld
-      .video(sourceAsset.publicId)
+    return createBaseVideo(sourceAsset)
       .videoEdit(trim().startOffset(draft.startOffset))
       .resize(
         fill()
@@ -167,8 +173,7 @@ function buildAiPreviewUrl(
   draft: CreatorDraft,
   platform: PlatformPreset
 ): string {
-  return cld
-    .video(sourceAsset.publicId)
+  return createBaseVideo(sourceAsset)
     .videoEdit(
       preview()
         .duration(draft.clipDuration)
@@ -216,15 +221,21 @@ function splitCaptionLines(captionSeed: string, headline: string): string[] {
   return lines.slice(0, 2);
 }
 
-function extractTransformationRecipe(url: string, publicId: string): string {
-  const marker = '/upload/';
+function extractTransformationRecipe(url: string, sourceAsset: MediaAsset): string {
+  const marker = url.includes('/fetch/') ? '/fetch/' : '/upload/';
   const start = url.indexOf(marker);
   if (start === -1) {
     return '';
   }
 
   const rest = url.slice(start + marker.length);
-  const splitMarker = publicId ? `/${publicId}` : '/';
+
+  if (isRemoteAsset(sourceAsset)) {
+    const remoteStart = rest.indexOf('/http');
+    return remoteStart === -1 ? rest : rest.slice(0, remoteStart);
+  }
+
+  const splitMarker = sourceAsset.publicId ? `/${sourceAsset.publicId}` : '/';
   const end = rest.lastIndexOf(splitMarker);
   return end === -1 ? rest : rest.slice(0, end);
 }
@@ -273,7 +284,7 @@ export function buildPreviewManifest(
   }
 
   return {
-    id: `${platform.id}-${sourceAsset.publicId || 'remote'}-${draft.startOffset}-${draft.clipDuration}`,
+    id: `${platform.id}-${sourceAsset.publicId || sourceAsset.id}-${draft.startOffset}-${draft.clipDuration}`,
     platform,
     deliveryUrl,
     aiPreviewUrl,
@@ -283,7 +294,7 @@ export function buildPreviewManifest(
       draft,
       platform
     ),
-    transformationRecipe: extractTransformationRecipe(deliveryUrl, sourceAsset.publicId),
+    transformationRecipe: extractTransformationRecipe(deliveryUrl, sourceAsset),
     transformationSummary: summary,
     captionLines: splitCaptionLines(draft.captionSeed, draft.headline),
     sourceLabel: sourceAsset.label,
@@ -299,7 +310,7 @@ export function buildManifestPayload(
   manifests: RenderManifest[]
 ): Record<string, unknown> {
   return {
-    app: 'yt-shortmaker',
+    app: 'shorty',
     generatedAt: new Date().toISOString(),
     sourceAsset: {
       publicId: sourceAsset.publicId,

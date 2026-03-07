@@ -139,7 +139,7 @@ try {
   });
 
   const compositeRenderUrl = await page
-    .locator('[data-testid="preview-card"] .mini-button--link')
+    .locator('[data-testid="preview-card"] [data-testid="render-link"]')
     .first()
     .getAttribute('href');
 
@@ -155,11 +155,10 @@ try {
   await page.getByTestId('attach-remote-gameplay-button').click();
 
   await page.waitForFunction(() => {
-    const manifest = document.querySelector('.manifest-console')?.textContent || '';
-    return manifest.includes('"strategy": "remote-fetch"');
+    return document.body.innerText.includes('Remote Gameplay Feed');
   });
 
-  const screenshotPath = path.join(os.tmpdir(), 'yt-shortmaker-smoke.png');
+  const screenshotPath = path.join(os.tmpdir(), 'shorty-smoke.png');
   await page.screenshot({ path: screenshotPath, fullPage: true });
 
   console.log(`Smoke test passed. Composite render status: ${renderStatus}. Screenshot: ${screenshotPath}`);
