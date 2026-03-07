@@ -682,9 +682,8 @@ function App() {
                     </div>
                     {draft.includeGameplay ? (
                       <div className="gameplay-banner">
-                        {manifest.compositionMode === 'gameplay-stack'
-                          ? `Gameplay composite live: ${manifest.gameplayLabel ?? 'Upload or keep sample'}`
-                          : `Gameplay layer queued: ${manifest.gameplayLabel ?? 'Upload or keep sample'}`}
+                        Gameplay composite live:{' '}
+                        {manifest.gameplayLabel ?? 'Upload or keep sample'}
                       </div>
                     ) : null}
                     <div className="cta-chip">{draft.ctaLabel}</div>

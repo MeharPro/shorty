@@ -33,7 +33,7 @@ Current maturity:
 
 - This is an MVP / starter, not a production-complete editor.
 - It is optimized for the Cloudinary challenge first.
-- It is not yet a full end-to-end AI shortmaker with automatic captions, transcript scoring, or final composite rendering.
+- It is not yet a full end-to-end AI shortmaker with automatic captions, transcript scoring, or timeline-grade editing.
 
 Verification completed:
 
