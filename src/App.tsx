@@ -99,6 +99,11 @@ function App() {
   const manifestJson = JSON.stringify(manifestPayload, null, 2);
   const sourcePreviewUrl = buildPlayableSourceUrl(sourceAsset);
   const gameplayPreviewUrl = buildPlayableSourceUrl(gameplayAsset);
+  const selectedPlatformLabels = PLATFORM_PRESETS.filter((platform) =>
+    draft.platforms.includes(platform.id)
+  )
+    .map((platform) => platform.label)
+    .join(', ');
 
   useEffect(() => {
     saveDraft(draft);
@@ -144,6 +149,7 @@ function App() {
 
   const handleGameplayUploadSuccess = (result: CloudinaryUploadResult) => {
     setGameplayAsset(createMediaAssetFromUpload(result, 'Uploaded Gameplay Bed'));
+    setRemoteGameplayUrl('');
     setDraft((current) => ({
       ...current,
       includeGameplay: true,
@@ -174,6 +180,16 @@ function App() {
 
     attachGameplayFeed(url);
     setStatusMessage('Remote gameplay feed attached for live lower-half compositing.');
+  };
+
+  const useSampleGameplay = () => {
+    setGameplayAsset(SAMPLE_GAMEPLAY_ASSET);
+    setRemoteGameplayUrl('');
+    setDraft((current) => ({
+      ...current,
+      includeGameplay: true,
+    }));
+    setStatusMessage('Sample gameplay loaded into the composite stack.');
   };
 
   const applyStoryPreset = (preset: StoryPreset) => {
@@ -229,12 +245,11 @@ function App() {
     <div className="app-shell">
       <header className="hero">
         <div className="hero-copy">
-          <span className="eyebrow">Hack Canada 2026 // Cloudinary-first build</span>
+          <span className="eyebrow">AI Video Repurposing Studio</span>
           <h1>yt-shortmaker</h1>
           <p className="hero-body">
-            Turn a regular upload into Shorts, Reels, and TikToks with Cloudinary trim windows,
-            vertical crops, caption packs, and live gameplay composites when a second feed is
-            attached.
+            Turn one source video into ready-to-post Shorts, Reels, and TikToks with vertical
+            crops, caption-ready layouts, and optional gameplay stacking.
           </p>
           <div className="hero-actions">
             <button
@@ -272,25 +287,26 @@ function App() {
 
         <div className="hero-stats">
           <article className="stat-card">
-            <span className="stat-label">Delivery stack</span>
-            <strong>{manifests.length} export recipes</strong>
+            <span className="stat-label">Step 1</span>
+            <strong>Add your media</strong>
             <p>
-              Each platform gets its own vertical crop, safe-zone plan, and delivery URL.
+              Start with a source clip, then attach gameplay only if you want a stacked lower
+              half.
             </p>
           </article>
           <article className="stat-card">
-            <span className="stat-label">Cloudinary workflow</span>
-            <strong>Trim, crop, preview, deliver</strong>
+            <span className="stat-label">Step 2</span>
+            <strong>{storyPreset.label}</strong>
             <p>
-              Real URLs are generated for sponsor demos, while posters render instantly for the
-              interface.
+              Presets load sensible defaults for pacing, caption tone, and whether gameplay is on.
             </p>
           </article>
           <article className="stat-card">
-            <span className="stat-label">Hackathon scope</span>
-            <strong>Web app first, Reactiv later</strong>
+            <span className="stat-label">Step 3</span>
+            <strong>{manifests.length} output{manifests.length === 1 ? '' : 's'} selected</strong>
             <p>
-              The main build is Cloudinary-native; the Reactiv angle can stay a separate App Clip.
+              Exporting to {selectedPlatformLabels || 'no platforms selected'} with{' '}
+              {draft.includeGameplay ? 'gameplay compositing on.' : 'a single-video layout.'}
             </p>
           </article>
         </div>
@@ -301,14 +317,14 @@ function App() {
           <section className="panel">
             <div className="panel-header">
               <div>
-                <h2>Source Media</h2>
+                <span className="panel-step">Step 1</span>
+                <h2>Add Media</h2>
                 <p>
-                  Upload your own Cloudinary videos, or keep shipping against the demo assets while
-                  the editing flow stabilizes.
+                  Start with your main clip. Add gameplay only if you want a lower-half composite.
                 </p>
               </div>
               <span className="panel-badge">
-                {hasUploadPreset && !isDemoCloud ? 'Unsigned widget ready' : 'Sample-cloud mode'}
+                {hasUploadPreset && !isDemoCloud ? 'Uploads ready' : 'Demo mode'}
               </span>
             </div>
 
@@ -351,7 +367,7 @@ function App() {
                     type="button"
                     onClick={() => setSourceAsset(SAMPLE_PRIMARY_ASSET)}
                   >
-                    Use sample
+                    Load sample
                   </button>
                 </div>
               </article>
@@ -392,9 +408,9 @@ function App() {
                   <button
                     className="button button--ghost"
                     type="button"
-                    onClick={() => setGameplayAsset(SAMPLE_GAMEPLAY_ASSET)}
+                    onClick={useSampleGameplay}
                   >
-                    Use sample
+                    Load sample
                   </button>
                 </div>
                 <div className="remote-gameplay">
@@ -428,10 +444,10 @@ function App() {
           <section className="panel">
             <div className="panel-header">
               <div>
-                <h2>Story Recipe</h2>
+                <span className="panel-step">Step 2</span>
+                <h2>Choose A Style</h2>
                 <p>
-                  Preset stacks let you pivot between explainers, promo reels, and gameplay-backed
-                  creator edits.
+                  Pick a preset to load a starting point, then adjust the details below.
                 </p>
               </div>
             </div>
@@ -457,9 +473,10 @@ function App() {
           <section className="panel">
             <div className="panel-header">
               <div>
-                <h2>Editing Controls</h2>
+                <span className="panel-step">Step 3</span>
+                <h2>Tune The Clip</h2>
                 <p>
-                  Everything here feeds the generated Cloudinary delivery URLs and export manifests.
+                  These controls shape every generated render and poster preview.
                 </p>
               </div>
             </div>
@@ -551,7 +568,7 @@ function App() {
                 <span>
                   <strong>Generate AI preview URL</strong>
                   <small>
-                    Uses Cloudinary&apos;s preview effect for sponsor-side wow factor.
+                    Generates a highlight-style preview URL from the source clip.
                   </small>
                 </span>
               </label>
@@ -589,19 +606,16 @@ function App() {
             </div>
           </section>
 
-          <section className="panel">
-            <div className="panel-header">
+          <details className="panel panel--details">
+            <summary className="details-summary">
               <div>
-                <h2>Integration Readiness</h2>
-                <p>
-                  The repo is staged for Vercel deploys, Cloudinary MCP, and optional Supabase
-                  storage.
-                </p>
+                <h2>System Status</h2>
+                <p>Technical setup and storage details live here when you need them.</p>
               </div>
-            </div>
+            </summary>
             <ul className="readiness-list">
               <li>
-                <strong>Cloudinary widget</strong>
+                <strong>Uploads</strong>
                 <span>
                   {hasUploadPreset
                     ? 'Unsigned uploads are live.'
@@ -609,38 +623,35 @@ function App() {
                 </span>
               </li>
               <li>
-                <strong>Cloudinary MCP</strong>
+                <strong>Cloud</strong>
+                <span>{isDemoCloud ? 'Using Cloudinary demo assets.' : `Connected to ${cloudName}.`}</span>
+              </li>
+              <li>
+                <strong>API routes</strong>
                 <span>
-                  `.mcp.json` is generated and points at Cloudinary asset and env config endpoints.
+                  `/api/health`, `/api/render-manifest`, `/api/resolve-gameplay`, and `/api/sign-cloudinary` are available.
                 </span>
               </li>
               <li>
-                <strong>Vercel routes</strong>
-                <span>
-                  `/api/health`, `/api/render-manifest`, and `/api/sign-cloudinary` are included.
-                </span>
-              </li>
-              <li>
-                <strong>Supabase</strong>
+                <strong>Snapshots</strong>
                 <span>
                   {hasSupabaseBrowserConfig
-                    ? 'Browser client is configured.'
-                    : 'Use the included schema when you want auth and saved jobs.'}
+                    ? 'Saving locally and syncing to Supabase.'
+                    : 'Saving locally only until Supabase credentials are added.'}
                 </span>
               </li>
             </ul>
-          </section>
+          </details>
         </aside>
 
         <section className="preview-column">
           <section className="panel panel--preview">
             <div className="panel-header">
               <div>
-                <h2>Output Preview</h2>
+                <span className="panel-step">Step 4</span>
+                <h2>Preview And Export</h2>
                 <p>
-                  Posters render immediately from Cloudinary video frames. Final delivery URLs are
-                  attached to each card, and AI preview URLs can take a moment to materialize on
-                  first request.
+                  Check the poster, copy the render URL, or open the generated output in a new tab.
                 </p>
               </div>
               {statusMessage ? (
@@ -741,23 +752,9 @@ function App() {
           <section className="panel">
             <div className="panel-header">
               <div>
-                <h2>Manifest Console</h2>
-                <p>
-                  This is the payload a Vercel function or queue worker can use to drive final
-                  exports.
-                </p>
-              </div>
-            </div>
-            <pre className="manifest-console">{manifestJson}</pre>
-          </section>
-
-          <section className="panel">
-            <div className="panel-header">
-              <div>
                 <h2>Recent Snapshots</h2>
                 <p>
-                  Saved locally now, with optional Supabase sync when browser credentials are
-                  present.
+                  Save versions as you tune the edit so you can jump back to earlier combinations.
                 </p>
               </div>
             </div>
@@ -788,6 +785,16 @@ function App() {
               </p>
             )}
           </section>
+
+          <details className="panel panel--details">
+            <summary className="details-summary">
+              <div>
+                <h2>Advanced JSON Manifest</h2>
+                <p>Use this when you need the raw payload for APIs, automation, or debugging.</p>
+              </div>
+            </summary>
+            <pre className="manifest-console">{manifestJson}</pre>
+          </details>
         </section>
       </main>
     </div>

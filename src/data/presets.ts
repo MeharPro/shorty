@@ -64,7 +64,7 @@ export const STORY_PRESETS: StoryPreset[] = [
     id: 'clip-commander',
     label: 'Clip Commander',
     description: 'Turn a long-form talking-head or tutorial clip into a vertical recap with bold captions.',
-    challengeFit: 'Cloudinary smart crop, trim windows, caption-ready delivery, and direct social exports.',
+    challengeFit: 'Best for tutorials, explainers, and direct-to-camera recaps.',
     defaults: {
       storyPresetId: 'clip-commander',
       headline: 'Turn any 16:9 upload into a vertical short with captions',
@@ -80,7 +80,7 @@ export const STORY_PRESETS: StoryPreset[] = [
     id: 'launch-loop',
     label: 'Launch Loop',
     description: 'Package a product demo or founder update into a polished Reel with a strong CTA.',
-    challengeFit: 'Cloudinary delivery recipes, branded still posters, and platform-safe export variants.',
+    challengeFit: 'Best for product teasers, launch clips, and announcement reels.',
     defaults: {
       storyPresetId: 'launch-loop',
       headline: 'Ship a promo-ready Reel from one source video',
@@ -96,7 +96,7 @@ export const STORY_PRESETS: StoryPreset[] = [
     id: 'gameplay-stack',
     label: 'Gameplay Stack',
     description: 'Layer creator narration over a gameplay bed and export a creator-friendly vertical template.',
-    challengeFit: 'Cloudinary video delivery plus a production plan for split-screen overlays and caption burn-ins.',
+    challengeFit: 'Best for reactions, commentary, and gameplay-backed vertical edits.',
     defaults: {
       storyPresetId: 'gameplay-stack',
       headline: 'Commentary on top, gameplay below, captions dead center',

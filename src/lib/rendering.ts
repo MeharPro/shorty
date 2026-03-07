@@ -266,7 +266,7 @@ export function buildPreviewManifest(
   }
 
   if (draft.useAiPreview) {
-    summary.push('AI highlight preview URL generated for sponsor-side demoing');
+    summary.push('AI highlight preview URL generated from the source clip');
     if (isGameplayComposite) {
       summary.push('AI preview is source-first and does not yet include gameplay compositing');
     }
