@@ -113,11 +113,11 @@ export class ShortyStudioModel {
   }
 
   get eyebrow(): string {
-    return 'CUT FAST. POST CLEAN.';
+    return 'YOUTUBE-STYLE SHORT-FORM STUDIO';
   }
 
   get heroBody(): string {
-    return 'Build sharp vertical edits from one source clip, stack gameplay when you need motion, and export platform-ready renders without touching a timeline.';
+    return 'Build clean vertical edits from one source clip, layer gameplay only when the pacing needs it, and line up export-ready versions for every short-form platform.';
   }
 
   get uploadsAvailable(): boolean {
@@ -141,18 +141,18 @@ export class ShortyStudioModel {
     return [
       {
         eyebrow: 'Input',
-        title: this.sourceCard.asset.label,
-        body: 'Load a main video first. Gameplay stays optional and only appears when you want a split layout.',
+        title: 'One source, many cuts',
+        body: 'Start with the main clip, then add gameplay only when the edit needs extra movement.',
       },
       {
         eyebrow: 'Mode',
         title: this.options.storyPreset.label,
-        body: `${this.options.storyPreset.description} Caption tone: ${this.options.captionTheme.label}.`,
+        body: `${this.options.storyPreset.description} Captions land in ${this.options.captionTheme.label}.`,
       },
       {
         eyebrow: 'Output',
-        title: `${this.options.manifests.length} render${this.options.manifests.length === 1 ? '' : 's'} ready`,
-        body: `${this.platformSummary} • ${this.options.draft.includeGameplay ? 'Gameplay stack on' : 'Single-video mode'}`,
+        title: `${this.options.manifests.length} publish target${this.options.manifests.length === 1 ? '' : 's'} armed`,
+        body: `${this.platformSummary} • ${this.options.draft.includeGameplay ? 'Gameplay stack on' : 'Single-video layout'}`,
       },
     ];
   }

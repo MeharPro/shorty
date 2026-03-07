@@ -4,19 +4,21 @@
   font-family: 'IBM Plex Sans', sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #f6f4ef;
+  color: #111111;
   background:
-    radial-gradient(circle at top left, rgba(255, 75, 43, 0.22), transparent 28%),
-    radial-gradient(circle at top right, rgba(255, 136, 0, 0.18), transparent 22%),
-    linear-gradient(180deg, #040404 0%, #090909 52%, #020202 100%);
+    radial-gradient(circle at top right, rgba(255, 57, 44, 0.1), transparent 22%),
+    radial-gradient(circle at 15% 0%, rgba(255, 149, 0, 0.08), transparent 18%),
+    linear-gradient(180deg, #ffffff 0%, #fff8f6 52%, #ffffff 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  --text-strong: #f6f4ef;
-  --text-soft: rgba(246, 244, 239, 0.72);
-  --accent-red: #ff4b2b;
-  --accent-orange: #ff8800;
+  --ink: #111111;
+  --surface: #ffffff;
+  --text-strong: #111111;
+  --text-soft: rgba(17, 17, 17, 0.72);
+  --brand-red: #ff392c;
+  --brand-orange: #ff9900;
 }
 
 * {
@@ -31,17 +33,17 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  color: var(--text-strong);
+  background: inherit;
 }
 
 body::before {
   content: '';
   position: fixed;
   inset: 0;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size: 32px 32px;
-  mask-image: linear-gradient(180deg, black, transparent 92%);
+  background:
+    linear-gradient(120deg, rgba(255, 255, 255, 0.44), transparent 34%),
+    radial-gradient(circle at 80% 18%, rgba(255, 57, 44, 0.06), transparent 20%);
   pointer-events: none;
 }
 

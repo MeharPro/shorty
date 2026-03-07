@@ -1,3 +1,4 @@
+import shortyBolt from '../assets/shorty-bolt.svg';
 import { UploadWidget } from '../cloudinary/UploadWidget';
 import type { CloudinaryUploadResult } from '../cloudinary/UploadWidget';
 import type {
@@ -31,6 +32,19 @@ export function ShortyHero({
   return (
     <header className="shorty-hero">
       <section className="shorty-hero__primary">
+        <div className="shorty-brandbar">
+          <div className="shorty-brand">
+            <div className="shorty-brand__logo-wrap">
+              <img className="shorty-brand__logo" src={shortyBolt} alt="Shorty logo" />
+            </div>
+            <div className="shorty-brand__meta">
+              <span>Shorty / creator studio</span>
+              <strong>Short-form editor</strong>
+            </div>
+          </div>
+          <div className="shorty-brandbar__status">Shorts-ready workflow</div>
+        </div>
+
         <span className="shorty-kicker">{model.eyebrow}</span>
         <h1>{model.brandName}</h1>
         <p>{model.heroBody}</p>
@@ -67,14 +81,30 @@ export function ShortyHero({
         </div>
       </section>
 
-      <section className="shorty-stage-grid">
-        {model.stageCards.map((card) => (
-          <article className="shorty-stage-card" key={`${card.eyebrow}-${card.title}`}>
-            <span className="shorty-stage-card__eyebrow">{card.eyebrow}</span>
-            <strong>{card.title}</strong>
-            <p>{card.body}</p>
-          </article>
-        ))}
+      <section className="shorty-hero__rail">
+        <article className="shorty-hero-visual">
+          <div className="shorty-hero-visual__copy">
+            <span>Creator flow</span>
+            <strong>Shape once. Publish across Shorts, Reels, and TikTok.</strong>
+            <p>
+              Keep the workflow clean: source clip first, gameplay only when needed, then export
+              platform-safe renders without fighting the editor.
+            </p>
+          </div>
+          <div className="shorty-hero-visual__mark">
+            <img className="shorty-hero-visual__logo" src={shortyBolt} alt="Shorty mark" />
+          </div>
+        </article>
+
+        <section className="shorty-stage-grid">
+          {model.stageCards.map((card) => (
+            <article className="shorty-stage-card" key={`${card.eyebrow}-${card.title}`}>
+              <span className="shorty-stage-card__eyebrow">{card.eyebrow}</span>
+              <strong>{card.title}</strong>
+              <p>{card.body}</p>
+            </article>
+          ))}
+        </section>
       </section>
     </header>
   );
@@ -204,8 +234,8 @@ export function ShortyMediaSection({
       <div className="shorty-panel__header">
         <div>
           <span className="shorty-panel__step">01</span>
-          <h2>Media</h2>
-          <p>Start with a source clip. Add gameplay only when the cut needs extra motion.</p>
+          <h2>Media shelf</h2>
+          <p>Start with the main clip. Add gameplay only when the cut needs extra movement.</p>
         </div>
         <span className="shorty-panel__badge">
           {model.uploadsAvailable ? 'Uploads live' : 'Sample mode'}
@@ -257,8 +287,8 @@ export function ShortyStyleSection({
       <div className="shorty-panel__header">
         <div>
           <span className="shorty-panel__step">02</span>
-          <h2>Style</h2>
-          <p>Use a preset as the starting point, then bend it into your own format.</p>
+          <h2>Format packs</h2>
+          <p>Pick the tone first. Everything else can be tuned after.</p>
         </div>
       </div>
 
@@ -317,8 +347,8 @@ export function ShortyControlSection({
       <div className="shorty-panel__header">
         <div>
           <span className="shorty-panel__step">03</span>
-          <h2>Composer</h2>
-          <p>Everything here shapes the generated render URLs, poster cards, and export payload.</p>
+          <h2>Cut controls</h2>
+          <p>Tune the hook, captions, and destinations without losing the edit.</p>
         </div>
       </div>
 
@@ -462,10 +492,12 @@ export function ShortyPreviewDeck({
       <div className="shorty-panel__header">
         <div>
           <span className="shorty-panel__step">04</span>
-          <h2>Preview</h2>
-          <p>Check the poster, copy a render URL, or open the generated output in a new tab.</p>
+          <h2>Preview queue</h2>
+          <p>Check the vertical mockup, copy a render URL, or open the final output.</p>
         </div>
-        {statusMessage ? <span className="shorty-panel__badge shorty-panel__badge--live">{statusMessage}</span> : null}
+        {statusMessage ? (
+          <span className="shorty-panel__badge shorty-panel__badge--live">{statusMessage}</span>
+        ) : null}
       </div>
 
       <div className="shorty-preview-grid">
@@ -520,7 +552,7 @@ export function ShortyPreviewDeck({
                     type="button"
                     onClick={() => onCopyRenderUrl(manifest.id, manifest.deliveryUrl)}
                   >
-                    {copiedToken === `url-${manifest.id}` ? 'Copied' : 'Copy URL'}
+                    {copiedToken === `url-${manifest.id}` ? 'Copied' : 'Copy link'}
                   </button>
                   <a
                     className="shorty-mini-button shorty-mini-button--link"
@@ -534,13 +566,28 @@ export function ShortyPreviewDeck({
                 </div>
               </div>
 
-              <ul className="shorty-summary-list">
-                {manifest.transformationSummary.map((summary) => (
+              <div className="shorty-preview-pill-row">
+                <span className="shorty-preview-pill">{manifest.platform.exportLabel}</span>
+                <span className="shorty-preview-pill">
+                  {manifest.compositionMode === 'gameplay-stack' ? 'Gameplay stack' : 'Single clip'}
+                </span>
+                {manifest.aiPreviewUrl ? (
+                  <span className="shorty-preview-pill shorty-preview-pill--accent">
+                    AI preview
+                  </span>
+                ) : null}
+              </div>
+
+              <ul className="shorty-summary-chips">
+                {manifest.transformationSummary.slice(0, 4).map((summary) => (
                   <li key={summary}>{summary}</li>
                 ))}
               </ul>
 
-              <code className="shorty-recipe">{manifest.transformationRecipe}</code>
+              <details className="shorty-inline-details">
+                <summary>View render recipe</summary>
+                <code className="shorty-recipe">{manifest.transformationRecipe}</code>
+              </details>
 
               {manifest.aiPreviewUrl ? (
                 <a
