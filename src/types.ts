@@ -101,6 +101,34 @@ export interface ReelScoreBreakdown {
   insightDensity: number;
 }
 
+export interface VisualHighlight {
+  id: string;
+  start: number;
+  end: number;
+  score: number;
+  label: string;
+  dominantExpression: 'smile' | 'surprise' | 'emphasis' | 'engagement';
+  faceCount: number;
+  metrics: {
+    smile: number;
+    surprise: number;
+    emphasis: number;
+    engagement: number;
+  };
+}
+
+export interface VisualAnalysisSummary {
+  provider: 'mediapipe-face-landmarker';
+  sourcePublicId?: string;
+  sourceUrl?: string;
+  analyzedDuration: number;
+  sampleCount: number;
+  averageScore: number;
+  peakScore: number;
+  highlights: VisualHighlight[];
+  generatedAt: string;
+}
+
 export interface ReelCandidate {
   id: string;
   rank: number;
@@ -114,11 +142,36 @@ export interface ReelCandidate {
   scoreBreakdown: ReelScoreBreakdown;
   reasoning: string[];
   editingPlan: string[];
-  analysisSource: 'transcript' | 'visual';
+  analysisSource: 'transcript' | 'visual' | 'hybrid';
+  expressionLabel?: string;
+  expressionScore?: number;
   deliveryUrl: string;
   posterUrl: string;
   downloadUrl: string;
   aiPreviewUrl: string | null;
+}
+
+export interface TranscriptWord {
+  word: string;
+  start: number;
+  end: number;
+}
+
+export interface TranscriptSegment {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+  confidence?: number;
+  words: TranscriptWord[];
+}
+
+export interface CaptionCue {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+  words: TranscriptWord[];
 }
 
 export interface ReelGenerationResponse {
@@ -131,6 +184,7 @@ export interface ReelGenerationResponse {
   };
   transcriptUsed: boolean;
   visualSignalsUsed: boolean;
+  visualAnalysis?: VisualAnalysisSummary;
   recommendedClipId: string | null;
   clips: ReelCandidate[];
 }
@@ -150,5 +204,6 @@ export interface VideoTranscriptionResponse {
   publicId?: string;
   sourceUrl: string;
   transcriptUrl?: string;
+  segments?: TranscriptSegment[];
   generatedAt: string;
 }
