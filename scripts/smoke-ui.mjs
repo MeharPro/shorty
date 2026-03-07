@@ -1,22 +1,40 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { chromium } from 'playwright';
-import { resolveGameplayUrl } from '../lib/gameplayResolver.js';
+import feature1AgentHandler from '../api/feature1-agent.js';
+import generateReelsHandler from '../api/generate-reels.js';
+import healthHandler from '../api/health.js';
 
-const port = process.env.SMOKE_PORT || '4173';
+const port = Number(process.env.SMOKE_PORT || 4173);
+const apiPort = Number(process.env.SMOKE_API_PORT || 3000);
 const baseUrl = process.env.SMOKE_BASE_URL || `http://127.0.0.1:${port}/`;
+const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForServer(url, timeoutMs = 25000) {
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+
+    req.on('data', (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    req.on('end', () => {
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    req.on('error', reject);
+  });
+}
+
+async function waitForEndpoint(url, timeoutMs = 45000) {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
@@ -26,151 +44,275 @@ async function waitForServer(url, timeoutMs = 25000) {
         return;
       }
     } catch {
-      // Keep polling until the Vite server is ready.
+      // Keep polling until the service is ready.
     }
 
-    await sleep(250);
+    await sleep(300);
   }
 
   throw new Error(`Timed out waiting for ${url}`);
 }
 
-async function assertRenderable(url, attempts = 5) {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const response = await fetch(url, {
-      headers: {
-        range: 'bytes=0-0',
-      },
-    });
+function buildWordTimings(text, start, end) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const duration = Math.max(end - start, 0.6);
+  const step = duration / Math.max(words.length, 1);
 
-    if ([200, 206, 401].includes(response.status)) {
-      return response.status;
-    }
-
-    if (response.status === 423 && attempt === attempts) {
-      return response.status;
-    }
-
-    if (response.status !== 423) {
-      throw new Error(`Unexpected render status ${response.status} for ${url}`);
-    }
-
-    await sleep(2000);
-  }
-
-  throw new Error(`Render never became ready for ${url}`);
+  return words.map((word, index) => ({
+    word,
+    start: Number((start + index * step).toFixed(2)),
+    end: Number((start + (index + 1) * step).toFixed(2)),
+  }));
 }
 
-const devServer = spawn(
+function createSegment(id, text, start, end) {
+  return {
+    id,
+    text,
+    start,
+    end,
+    words: buildWordTimings(text, start, end),
+  };
+}
+
+const smokeSession = {
+  name: 'Smoke Tester',
+  email: 'smoke@example.com',
+  userId: 'smoke-user',
+};
+
+const smokeUpload = {
+  id: 'upload-dog-demo',
+  publicId: 'dog',
+  secureUrl: 'https://res.cloudinary.com/demo/video/upload/dog.mp4',
+  label: 'Demo speaker clip',
+  duration: 95,
+  thumbnailUrl: 'https://res.cloudinary.com/demo/video/upload/w_240,h_135,c_fill,so_0/dog.jpg',
+  uploadedAt: '2026-03-07T12:00:00.000Z',
+};
+
+const smokeTranscript = {
+  transcript: [
+    '00:00 Here is the secret nobody tells you about going viral with short videos.',
+    '00:24 The first three seconds have to land instantly or people keep scrolling.',
+    '00:48 If the speaker is clear, the captions are tight, and the motion feels earned, retention jumps.',
+  ].join('\n'),
+  provider: 'smoke-fixture',
+  model: 'smoke-fixture',
+  transcriptUrl: '',
+  generatedAt: '2026-03-07T12:00:00.000Z',
+  segments: [
+    createSegment(
+      'seg-1',
+      'Here is the secret nobody tells you about going viral with short videos.',
+      0,
+      12
+    ),
+    createSegment(
+      'seg-2',
+      'The first three seconds have to land instantly or people keep scrolling.',
+      24,
+      36
+    ),
+    createSegment(
+      'seg-3',
+      'If the speaker is clear, the captions are tight, and the motion feels earned, retention jumps.',
+      48,
+      66
+    ),
+  ],
+};
+
+const frontend = spawn(
   npmCommand,
-  ['run', 'dev', '--', '--host', '127.0.0.1', '--port', port],
+  ['run', 'dev', '--', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
   {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: process.env,
+    env: {
+      ...process.env,
+      VERCEL_PORT: String(apiPort),
+      VITE_SUPABASE_URL: '',
+      VITE_SUPABASE_ANON_KEY: '',
+    },
   }
 );
 
-devServer.stdout.on('data', (chunk) => {
+frontend.stdout.on('data', (chunk) => {
   process.stdout.write(chunk);
 });
 
-devServer.stderr.on('data', (chunk) => {
+frontend.stderr.on('data', (chunk) => {
   process.stderr.write(chunk);
 });
 
 let browser;
-const fixtureServer = createServer((req, res) => {
-  if (req.url === '/fixture') {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(`<!doctype html>
-      <html lang="en">
-        <head>
-          <meta property="og:video" content="https://res.cloudinary.com/demo/video/upload/dog.mp4" />
-          <title>Gameplay Fixture</title>
-        </head>
-        <body>
-          <video controls src="https://res.cloudinary.com/demo/video/upload/dog.mp4"></video>
-        </body>
-      </html>`);
-    return;
-  }
+let apiServer;
 
-  res.writeHead(404);
-  res.end('Not found');
-});
+const routeHandlers = new Map([
+  ['/api/health', healthHandler],
+  ['/api/generate-reels', generateReelsHandler],
+  ['/api/feature1-agent', feature1AgentHandler],
+]);
+
+async function startApiServer() {
+  apiServer = createServer(async (req, res) => {
+    const requestPath = new URL(req.url || '/', apiBaseUrl).pathname;
+    const handler = routeHandlers.get(requestPath);
+
+    if (!handler) {
+      res.statusCode = 404;
+      res.setHeader('content-type', 'application/json; charset=utf-8');
+      res.end(JSON.stringify({ error: 'Not found' }));
+      return;
+    }
+
+    const body = await parseBody(req);
+    const response = {
+      statusCode: 200,
+      setHeader(name, value) {
+        res.setHeader(name, value);
+      },
+      status(code) {
+        this.statusCode = code;
+        res.statusCode = code;
+        return this;
+      },
+      json(payload) {
+        if (!res.headersSent) {
+          res.setHeader('content-type', 'application/json; charset=utf-8');
+        }
+        res.statusCode = this.statusCode;
+        res.end(JSON.stringify(payload));
+      },
+      end(payload) {
+        res.statusCode = this.statusCode;
+        res.end(payload);
+      },
+    };
+
+    try {
+      await handler(
+        {
+          ...req,
+          body,
+        },
+        response
+      );
+    } catch (error) {
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.setHeader('content-type', 'application/json; charset=utf-8');
+      }
+      res.end(
+        JSON.stringify({
+          error: error instanceof Error ? error.message : 'Smoke API server failed.',
+        })
+      );
+    }
+  });
+
+  await new Promise((resolve, reject) => {
+    apiServer.once('error', reject);
+    apiServer.listen(apiPort, '127.0.0.1', resolve);
+  });
+}
 
 try {
-  await new Promise((resolve, reject) => {
-    fixtureServer.once('error', reject);
-    fixtureServer.listen(0, '127.0.0.1', resolve);
-  });
+  await startApiServer();
 
-  const fixtureAddress = fixtureServer.address();
-  if (!fixtureAddress || typeof fixtureAddress === 'string') {
-    throw new Error('Could not start the gameplay resolver fixture server.');
-  }
-
-  const resolverResult = await resolveGameplayUrl(
-    `http://127.0.0.1:${fixtureAddress.port}/fixture`
-  );
-  if (
-    resolverResult.mode !== 'scraped' ||
-    resolverResult.resolvedUrl !== 'https://res.cloudinary.com/demo/video/upload/dog.mp4'
-  ) {
-    throw new Error('Gameplay resolver did not extract the expected direct video URL.');
-  }
-
-  await waitForServer(baseUrl);
+  await waitForEndpoint(baseUrl, 45000);
+  await waitForEndpoint(`${apiBaseUrl}/api/health`, 60000);
 
   browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1600 } });
-  await page.goto(baseUrl, { waitUntil: 'networkidle' });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } });
 
-  await page.waitForSelector('[data-testid="preview-card"]');
-  const previewCount = await page.locator('[data-testid="preview-card"]').count();
-  if (previewCount !== 3) {
-    throw new Error(`Expected 3 preview cards on first load, found ${previewCount}.`);
-  }
-
-  await page.getByTestId('preset-gameplay-stack').click();
-  await page.waitForFunction(() => {
-    const cards = Array.from(document.querySelectorAll('[data-testid="preview-card"]'));
-    return cards.length > 0 && cards.every((card) => card.getAttribute('data-composition-mode') === 'gameplay-stack');
-  });
-
-  const compositeRenderUrl = await page
-    .locator('[data-testid="preview-card"] [data-testid="render-link"]')
-    .first()
-    .getAttribute('href');
-
-  if (!compositeRenderUrl) {
-    throw new Error('Gameplay composite render URL was not generated.');
-  }
-
-  const renderStatus = await assertRenderable(compositeRenderUrl);
-
-  await page.getByTestId('gameplay-remote-input').fill(
-    'https://res.cloudinary.com/demo/video/upload/dog.mp4'
+  await page.addInitScript(
+    ({ session, upload, transcript }) => {
+      window.localStorage.setItem('shorty.session', JSON.stringify(session));
+      window.localStorage.setItem('shorty:uploads:v1', JSON.stringify([upload]));
+      window.localStorage.setItem(
+        `shorty:transcript:${upload.publicId}`,
+        JSON.stringify(transcript)
+      );
+    },
+    {
+      session: smokeSession,
+      upload: smokeUpload,
+      transcript: smokeTranscript,
+    }
   );
-  await page.getByTestId('attach-remote-gameplay-button').click();
+
+  await page.goto(new URL('/feature1', baseUrl).href, { waitUntil: 'networkidle' });
+
+  await page.waitForSelector('[data-testid="recent-upload-card"]', { timeout: 30000 });
+  await page.locator('[data-testid="recent-upload-card"]').first().click();
 
   await page.waitForFunction(() => {
-    return document.body.innerText.includes('Remote Gameplay Feed');
+    const banner = document.querySelector('[data-testid="feature1-status-banner"]');
+    return Boolean(banner?.textContent?.includes('Loaded'));
   });
 
-  const screenshotPath = path.join(os.tmpdir(), 'shorty-smoke.png');
+  await page.getByTestId('feature1-next-transcribe').click();
+  await page.waitForFunction(() => {
+    const input = document.querySelector('[data-testid="feature1-transcript"]');
+    return input instanceof HTMLTextAreaElement && input.value.trim().length > 0;
+  });
+
+  await page.getByTestId('feature1-next-generate').click();
+  await page.waitForSelector('[data-testid="feature1-agent-wish"]', { timeout: 30000 });
+  await page
+    .getByTestId('feature1-agent-wish')
+    .fill(
+      'Keep the active speaker fully visible, tighten captions so they fit, and push the top reel toward stronger hook energy without overdoing camera shake.'
+    );
+  await page.getByTestId('feature1-agent-apply').click();
+
+  await page.waitForFunction(() => {
+    const banner = document.querySelector('[data-testid="feature1-status-banner"]');
+    return Boolean(banner?.textContent?.includes('Local agent updated Feature 1'));
+  }, undefined, { timeout: 120000 });
+
+  await page.getByTestId('feature1-generate').click();
+
+  await page.waitForSelector('[data-testid="feature1-view-results"]', {
+    timeout: 180000,
+  });
+  await page.getByTestId('feature1-view-results').click();
+
+  await page.waitForSelector('[data-testid="feature1-reel-card"]', {
+    timeout: 120000,
+  });
+
+  const cardCount = await page.locator('[data-testid="feature1-reel-card"]').count();
+  const qaCount = await page.locator('[data-testid="feature1-reel-qa"]').count();
+
+  if (cardCount < 1) {
+    throw new Error('Expected at least one generated reel card.');
+  }
+
+  if (qaCount < 1) {
+    throw new Error('Expected reel QA badges to be present after generation.');
+  }
+
+  const qaSummary = await page.locator('[data-testid="feature1-reel-qa"]').first().innerText();
+  const screenshotPath = path.join(os.tmpdir(), 'shorty-feature1-smoke.png');
   await page.screenshot({ path: screenshotPath, fullPage: true });
 
-  console.log(`Smoke test passed. Composite render status: ${renderStatus}. Screenshot: ${screenshotPath}`);
+  console.log(
+    `Smoke test passed. Reels: ${cardCount}. QA badges: ${qaCount}. First QA: ${qaSummary}. Screenshot: ${screenshotPath}`
+  );
 } finally {
   await browser?.close();
-  await new Promise((resolve) => fixtureServer.close(resolve));
 
-  if (!devServer.killed) {
-    devServer.kill('SIGTERM');
-    await sleep(500);
-    if (!devServer.killed) {
-      devServer.kill('SIGKILL');
+  if (apiServer?.listening) {
+    await new Promise((resolve) => apiServer.close(resolve));
+  }
+
+  if (!frontend.killed) {
+    frontend.kill('SIGTERM');
+    await sleep(1000);
+    if (!frontend.killed) {
+      frontend.kill('SIGKILL');
     }
   }
 }
