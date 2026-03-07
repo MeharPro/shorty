@@ -1,4 +1,4 @@
-import type { CreatorDraft, ReelHistoryEntry, SavedExport } from '../types';
+import type { CreatorDraft, ReelHistoryEntry, SavedExport, TranscriptSegment, VideoTranscriptionResponse } from '../types';
 
 const DRAFT_KEY = 'shorty:draft:v1';
 const HISTORY_KEY = 'shorty:history:v1';
@@ -112,16 +112,66 @@ export function saveUploadHistory(history: UploadHistoryItem[]): void {
 
 const TRANSCRIPT_KEY_PREFIX = 'shorty:transcript:';
 
-export function loadTranscript(publicId: string): string {
+export interface StoredTranscriptData {
+  transcript: string;
+  segments?: TranscriptSegment[];
+  provider?: string;
+  model?: string;
+  transcriptUrl?: string;
+  generatedAt?: string;
+}
+
+export function loadTranscriptData(publicId: string): StoredTranscriptData | null {
   if (!canUseStorage() || !publicId) {
-    return '';
+    return null;
   }
 
   try {
-    return window.localStorage.getItem(TRANSCRIPT_KEY_PREFIX + publicId) || '';
+    const raw = window.localStorage.getItem(TRANSCRIPT_KEY_PREFIX + publicId);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as StoredTranscriptData | string;
+    if (typeof parsed === 'string') {
+      return parsed.trim() ? { transcript: parsed } : null;
+    }
+
+    if (!parsed || typeof parsed.transcript !== 'string') {
+      return null;
+    }
+
+    return parsed;
   } catch {
-    return '';
+    const fallback = window.localStorage.getItem(TRANSCRIPT_KEY_PREFIX + publicId) || '';
+    return fallback.trim() ? { transcript: fallback } : null;
   }
+}
+
+export function loadTranscript(publicId: string): string {
+  return loadTranscriptData(publicId)?.transcript || '';
+}
+
+export function saveTranscriptData(publicId: string, data: StoredTranscriptData | VideoTranscriptionResponse): void {
+  if (!canUseStorage() || !publicId) {
+    return;
+  }
+
+  if (!data.transcript.trim()) {
+    window.localStorage.removeItem(TRANSCRIPT_KEY_PREFIX + publicId);
+    return;
+  }
+
+  const payload: StoredTranscriptData = {
+    transcript: data.transcript,
+    segments: data.segments,
+    provider: data.provider,
+    model: data.model,
+    transcriptUrl: data.transcriptUrl,
+    generatedAt: data.generatedAt,
+  };
+
+  window.localStorage.setItem(TRANSCRIPT_KEY_PREFIX + publicId, JSON.stringify(payload));
 }
 
 export function saveTranscript(publicId: string, text: string): void {
@@ -130,7 +180,14 @@ export function saveTranscript(publicId: string, text: string): void {
   }
 
   if (text.trim()) {
-    window.localStorage.setItem(TRANSCRIPT_KEY_PREFIX + publicId, text);
+    const existing = loadTranscriptData(publicId);
+    window.localStorage.setItem(
+      TRANSCRIPT_KEY_PREFIX + publicId,
+      JSON.stringify({
+        ...(existing ?? {}),
+        transcript: text,
+      })
+    );
   } else {
     window.localStorage.removeItem(TRANSCRIPT_KEY_PREFIX + publicId);
   }

@@ -36,13 +36,25 @@ function buildRemoteUrl({ cloudName, remoteUrl, startOffset, duration, format = 
   return `https://res.cloudinary.com/${cloudName}/video/fetch/${transform}/${encodeURIComponent(remoteUrl)}${extension}`;
 }
 
-function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLines, poster = false }) {
+function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLines, poster = false, editingOptions = {} }) {
+  const { shakingCaptions = false } = editingOptions;
+
   const render = cld
     .video(publicId)
     .videoEdit(trim().startOffset(startOffset).duration(duration))
     .resize(fill().width(1080).height(1920).gravity(autoGravity()));
 
-  if (hook) {
+  if (hook && shakingCaptions) {
+    // Shaking captions: larger, bolder, with background highlight for attention
+    render.overlay(
+      source(
+        text(
+          sanitizeOverlayText(hook),
+          new TextStyle('Impact', 72).fontWeight('bold')
+        ).textColor('#FFFF00').backgroundColor('#000000A0')
+      ).position(new Position().gravity(compass('north')).offsetY(180))
+    );
+  } else if (hook) {
     render.overlay(
       source(
         text(sanitizeOverlayText(hook), new TextStyle('Arial', 58).fontWeight('bold')).textColor('white')
@@ -50,7 +62,40 @@ function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLi
     );
   }
 
-  if (captionLines?.[1]) {
+  if (captionLines?.[0] && shakingCaptions) {
+    render.overlay(
+      source(
+        text(
+          sanitizeOverlayText(captionLines[0]),
+          new TextStyle('Impact', 56).fontWeight('bold')
+        ).textColor('#FFFFFF').backgroundColor('#8B5CF6CC')
+      ).position(new Position().gravity(compass('south')).offsetY(200))
+    );
+    if (captionLines[1]) {
+      render.overlay(
+        source(
+          text(
+            sanitizeOverlayText(captionLines[1]),
+            new TextStyle('Impact', 48).fontWeight('bold')
+          ).textColor('#FFFFFF').backgroundColor('#8B5CF6CC')
+        ).position(new Position().gravity(compass('south')).offsetY(130))
+      );
+    }
+    } else if (captionLines?.[0]) {
+      render.overlay(
+        source(
+          text(sanitizeOverlayText(captionLines[0]), new TextStyle('Arial', 42).fontWeight('bold')).textColor('white')
+        ).position(new Position().gravity(compass('south')).offsetY(captionLines[1] ? 230 : 170))
+      );
+
+      if (captionLines[1]) {
+        render.overlay(
+          source(
+            text(sanitizeOverlayText(captionLines[1]), new TextStyle('Arial', 42).fontWeight('bold')).textColor('white')
+          ).position(new Position().gravity(compass('south')).offsetY(170))
+        );
+      }
+    } else if (captionLines?.[1]) {
     render.overlay(
       source(
         text(sanitizeOverlayText(captionLines[1]), new TextStyle('Arial', 42).fontWeight('bold')).textColor('white')
@@ -62,7 +107,7 @@ function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLi
     return render.format('jpg').toURL();
   }
 
-  return render.delivery(format(autoFormat())).delivery(quality(autoQuality())).toURL();
+  return render.delivery(format('mp4')).delivery(quality(autoQuality())).toURL();
 }
 
 export default function handler(req, res) {
@@ -84,47 +129,51 @@ export default function handler(req, res) {
     const publicId = sourceAsset?.publicId || null;
     const duration = clamp(Number(body.duration || sourceAsset?.duration || 180), 30, 3600);
     const transcriptText = String(body.transcriptText || '').trim();
+    const editingOptions = body.editingOptions ?? {};
+    const visualAnalysis = body.visualAnalysis ?? null;
 
     if (!publicId && !remoteUrl) {
       res.status(400).json({ error: 'Provide either a Cloudinary video source or a Google Drive link.' });
       return;
     }
 
-    const plan = buildReelPlan({ transcriptText, sourceDurationSeconds: duration });
+    const plan = buildReelPlan({ transcriptText, sourceDurationSeconds: duration, visualAnalysis });
     const clips = plan.clips.map((clip) => {
       const deliveryUrl = sourceMode === 'cloudinary-public-id' && publicId
         ? buildPublicClip({
-            cld,
-            publicId,
-            startOffset: clip.startOffset,
-            duration: clip.duration,
-            hook: clip.hook,
-            captionLines: clip.captionLines,
-          })
+          cld,
+          publicId,
+          startOffset: clip.startOffset,
+          duration: clip.duration,
+          hook: clip.hook,
+          captionLines: clip.captionLines,
+          editingOptions,
+        })
         : buildRemoteUrl({
-            cloudName,
-            remoteUrl,
-            startOffset: clip.startOffset,
-            duration: clip.duration,
-          });
+          cloudName,
+          remoteUrl,
+          startOffset: clip.startOffset,
+          duration: clip.duration,
+        });
 
       const posterUrl = sourceMode === 'cloudinary-public-id' && publicId
         ? buildPublicClip({
-            cld,
-            publicId,
-            startOffset: clip.startOffset,
-            duration: clip.duration,
-            hook: clip.hook,
-            captionLines: clip.captionLines,
-            poster: true,
-          })
+          cld,
+          publicId,
+          startOffset: clip.startOffset,
+          duration: clip.duration,
+          hook: clip.hook,
+          captionLines: clip.captionLines,
+          poster: true,
+          editingOptions,
+        })
         : buildRemoteUrl({
-            cloudName,
-            remoteUrl,
-            startOffset: clip.startOffset,
-            duration: clip.duration,
-            format: 'jpg',
-          });
+          cloudName,
+          remoteUrl,
+          startOffset: clip.startOffset,
+          duration: clip.duration,
+          format: 'jpg',
+        });
 
       return {
         ...clip,
@@ -133,12 +182,12 @@ export default function handler(req, res) {
         downloadUrl: deliveryUrl,
         aiPreviewUrl: sourceMode === 'cloudinary-public-id' && publicId
           ? cld
-              .video(publicId)
-              .videoEdit(trim().startOffset(clip.startOffset).duration(clip.duration))
-              .resize(fill().width(1080).height(1920).gravity(autoGravity()))
-              .delivery(format(autoFormat()))
-              .delivery(quality(autoQuality()))
-              .toURL()
+            .video(publicId)
+            .videoEdit(trim().startOffset(clip.startOffset).duration(clip.duration))
+            .resize(fill().width(1080).height(1920).gravity(autoGravity()))
+            .delivery(format('mp4'))
+            .delivery(quality(autoQuality()))
+            .toURL()
           : null,
       };
     });
@@ -153,6 +202,7 @@ export default function handler(req, res) {
       },
       transcriptUsed: plan.transcriptUsed,
       visualSignalsUsed: plan.visualSignalsUsed,
+      visualAnalysis: plan.visualAnalysis,
       recommendedClipId: clips[0]?.id ?? null,
       clips,
     });

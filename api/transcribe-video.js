@@ -23,6 +23,7 @@ export default async function handler(req, res) {
       publicId: result.publicId,
       sourceUrl: result.sourceUrl,
       transcriptUrl: result.transcriptUrl,
+      segments: result.segments,
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {
