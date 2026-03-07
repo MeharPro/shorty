@@ -488,7 +488,7 @@ export function ShortyPreviewDeck({
   onCopyRenderUrl,
 }: ShortyPreviewDeckProps) {
   return (
-    <section className="shorty-panel shorty-panel--sticky">
+    <section className="shorty-panel">
       <div className="shorty-panel__header">
         <div>
           <span className="shorty-panel__step">04</span>
