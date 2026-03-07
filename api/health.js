@@ -21,6 +21,11 @@ export default function handler(_req, res) {
         process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
       ),
     },
+    transcription: {
+      hasApiKey: Boolean(process.env.OPENAI_API_KEY),
+      baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+      model: process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1',
+    },
     generatedAt: new Date().toISOString(),
   });
 }
