@@ -72,6 +72,7 @@ function App() {
 
   const deferredDraft = useDeferredValue(draft);
   const hasUploadPreset = Boolean(uploadPreset);
+  const uploadsAvailable = hasUploadPreset && !isDemoCloud;
   const storyPreset =
     STORY_PRESETS.find((preset) => preset.id === draft.storyPresetId) ?? DEFAULT_STORY_PRESET;
   const captionTheme =
@@ -324,9 +325,16 @@ function App() {
                 </p>
               </div>
               <span className="panel-badge">
-                {hasUploadPreset && !isDemoCloud ? 'Uploads ready' : 'Demo mode'}
+                {uploadsAvailable ? 'Uploads ready' : 'Demo mode'}
               </span>
             </div>
+            {!uploadsAvailable ? (
+              <div className="panel-alert">
+                {isDemoCloud && hasUploadPreset
+                  ? 'Uploads are disabled because the app is still targeting Cloudinary demo. Set VITE_CLOUDINARY_CLOUD_NAME to your real cloud name so the genshort_unsigned preset can be found.'
+                  : 'Uploads stay disabled until a real Cloudinary cloud name and unsigned upload preset are configured.'}
+              </div>
+            ) : null}
 
             <div className="source-grid">
               <article className="source-card">

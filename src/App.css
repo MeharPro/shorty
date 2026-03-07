@@ -189,6 +189,16 @@
   color: #9ff2d5;
 }
 
+.panel-alert {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 116, 72, 0.12);
+  border: 1px solid rgba(255, 116, 72, 0.28);
+  color: #ffd7ca;
+  line-height: 1.5;
+}
+
 .details-summary {
   display: flex;
   align-items: flex-start;

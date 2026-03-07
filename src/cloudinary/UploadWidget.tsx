@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { uploadPreset } from './config';
+import { cloudName, isDemoCloud, uploadPreset } from './config';
 
 export interface CloudinaryUploadResult {
   asset_id?: string;
@@ -66,8 +66,18 @@ export function UploadWidget({
   const widgetRef = useRef<{ open: () => void } | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [scriptError, setScriptError] = useState(false);
+  const missingPreset = !uploadPreset;
+  const blockedMessage = isDemoCloud
+    ? `Uploads are disabled while VITE_CLOUDINARY_CLOUD_NAME is set to "demo". Switch it to your real Cloudinary cloud name to use the "${uploadPreset}" preset.`
+    : missingPreset
+      ? 'Add VITE_CLOUDINARY_UPLOAD_PRESET to enable uploads in the widget.'
+      : '';
 
   useEffect(() => {
+    if (missingPreset || isDemoCloud) {
+      return () => undefined;
+    }
+
     let poll: ReturnType<typeof setInterval> | null = null;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     let mounted = true;
@@ -82,9 +92,16 @@ export function UploadWidget({
         );
       }
 
+      if (isDemoCloud) {
+        console.warn(
+          'VITE_CLOUDINARY_CLOUD_NAME is set to "demo". ' +
+            'Uploads require your real Cloudinary cloud name.'
+        );
+      }
+
       widgetRef.current = window.cloudinary.createUploadWidget(
         {
-          cloudName: import.meta.env.VITE_CLOUDINARY_CLOUD_NAME,
+          cloudName,
           uploadPreset: uploadPreset || undefined,
           sources,
           multiple,
@@ -137,13 +154,20 @@ export function UploadWidget({
       if (poll) clearInterval(poll);
       if (timeout) clearTimeout(timeout);
     };
-  }, [clientAllowedFormats, folder, multiple, onUploadError, onUploadSuccess, resourceType, sources]);
+  }, [
+    clientAllowedFormats,
+    folder,
+    missingPreset,
+    multiple,
+    onUploadError,
+    onUploadSuccess,
+    resourceType,
+    sources,
+  ]);
 
   const handleClick = () => {
-    if (!uploadPreset) {
-      onUploadError?.(
-        new Error('Add VITE_CLOUDINARY_UPLOAD_PRESET to enable uploads in the widget.')
-      );
+    if (blockedMessage) {
+      onUploadError?.(new Error(blockedMessage));
       return;
     }
 
@@ -160,7 +184,14 @@ export function UploadWidget({
     );
   }
 
-  const canOpen = isReady && Boolean(uploadPreset);
+  const canOpen = isReady && !blockedMessage;
+  const buttonLabel = blockedMessage
+    ? isDemoCloud
+      ? 'Set real cloud name'
+      : 'Add upload preset'
+    : !isReady
+      ? 'Loading...'
+      : buttonText;
 
   return (
     <button
@@ -180,8 +211,9 @@ export function UploadWidget({
         transition: 'background-color 0.2s',
         opacity: canOpen ? 1 : 0.7,
       }}
+      title={blockedMessage || undefined}
     >
-      {!isReady ? 'Loading...' : uploadPreset ? buttonText : 'Add upload preset'}
+      {buttonLabel}
     </button>
   );
 }
