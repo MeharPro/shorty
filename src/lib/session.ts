@@ -1,17 +1,23 @@
 export interface ShortySession {
   name: string;
   email: string;
+  userId?: string;
 }
 
 const SESSION_KEY = 'shorty.session';
 
-export function createShortySession(email: string, preferredName?: string): ShortySession {
+export function createShortySession(
+  email: string,
+  preferredName?: string,
+  userId?: string
+): ShortySession {
   const trimmedEmail = email.trim();
   const fallbackName = trimmedEmail.split('@')[0] || 'Creator';
 
   return {
     name: preferredName?.trim() || fallbackName,
     email: trimmedEmail,
+    userId: userId?.trim() || undefined,
   };
 }
 
