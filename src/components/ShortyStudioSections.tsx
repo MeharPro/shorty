@@ -71,11 +71,11 @@ export function ShortyHero({
       <section className="shorty-hero__rail">
         <article className="shorty-hero-visual">
           <div className="shorty-hero-visual__copy">
-            <span>Creator flow</span>
-            <strong>Shape once. Publish across Shorts, Reels, and TikTok.</strong>
+            <span>Workspace</span>
+            <strong>Everything needed to build short-form outputs sits in this editor.</strong>
             <p>
-              Keep the workflow clean: source clip first, gameplay only when needed, then export
-              platform-safe renders without fighting the editor.
+              Use the left rail to adjust source media, preset, and composition. Review final
+              outputs in the preview queue on the right.
             </p>
           </div>
           <div className="shorty-hero-visual__mark">
@@ -222,7 +222,7 @@ export function ShortyMediaSection({
         <div>
           <span className="shorty-panel__step">01</span>
           <h2>Media shelf</h2>
-          <p>Start with the main clip. Add gameplay only when the cut needs extra movement.</p>
+          <p>Upload the source clip first. Gameplay stays optional.</p>
         </div>
         <span className="shorty-panel__badge">
           {model.uploadsAvailable ? 'Uploads live' : 'Sample mode'}
@@ -275,7 +275,7 @@ export function ShortyStyleSection({
         <div>
           <span className="shorty-panel__step">02</span>
           <h2>Format packs</h2>
-          <p>Pick the tone first. Everything else can be tuned after.</p>
+          <p>Choose the output pattern that matches the cut you want to ship.</p>
         </div>
       </div>
 
@@ -335,7 +335,7 @@ export function ShortyControlSection({
         <div>
           <span className="shorty-panel__step">03</span>
           <h2>Cut controls</h2>
-          <p>Tune the hook, captions, and destinations without losing the edit.</p>
+          <p>Adjust copy, timing, caption style, and destination outputs.</p>
         </div>
       </div>
 
@@ -480,7 +480,7 @@ export function ShortyPreviewDeck({
         <div>
           <span className="shorty-panel__step">04</span>
           <h2>Preview queue</h2>
-          <p>Check the vertical mockup, copy a render URL, or open the final output.</p>
+          <p>Review each generated output, then copy or open the render URL.</p>
         </div>
         {statusMessage ? (
           <span className="shorty-panel__badge shorty-panel__badge--live">{statusMessage}</span>

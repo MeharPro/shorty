@@ -126,6 +126,10 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1600 } });
   await page.goto(baseUrl, { waitUntil: 'networkidle' });
 
+  await page.waitForSelector('text=Open the tool and start cutting clips.');
+  await page.getByRole('link', { name: 'Open dashboard' }).click();
+  await page.waitForURL(/\/dashboard$/);
+
   await page.waitForSelector('[data-testid="preview-card"]');
   const previewCount = await page.locator('[data-testid="preview-card"]').count();
   if (previewCount !== 3) {

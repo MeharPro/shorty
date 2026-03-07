@@ -109,15 +109,15 @@ export class ShortyStudioModel {
   }
 
   get brandName(): string {
-    return 'Shorty';
+    return 'Create shorts';
   }
 
   get eyebrow(): string {
-    return 'YOUTUBE-STYLE SHORT-FORM STUDIO';
+    return 'Dashboard';
   }
 
   get heroBody(): string {
-    return 'Build clean vertical edits from one source clip, layer gameplay only when the pacing needs it, and line up export-ready versions for every short-form platform.';
+    return 'Set the source clip, adjust composition, and export platform-ready variants from one workspace.';
   }
 
   get uploadsAvailable(): boolean {
@@ -140,19 +140,21 @@ export class ShortyStudioModel {
   get stageCards(): ShortyStageCardModel[] {
     return [
       {
-        eyebrow: 'Input',
-        title: 'One source, many cuts',
-        body: 'Start with the main clip, then add gameplay only when the edit needs extra movement.',
+        eyebrow: 'Source',
+        title: this.options.sourceAsset.label,
+        body: this.options.draft.includeGameplay
+          ? 'Gameplay overlay is enabled for this workspace.'
+          : 'Single-video composition is active.',
       },
       {
-        eyebrow: 'Mode',
+        eyebrow: 'Preset',
         title: this.options.storyPreset.label,
-        body: `${this.options.storyPreset.description} Captions land in ${this.options.captionTheme.label}.`,
+        body: `${this.options.storyPreset.description} Captions use ${this.options.captionTheme.label}.`,
       },
       {
-        eyebrow: 'Output',
-        title: `${this.options.manifests.length} publish target${this.options.manifests.length === 1 ? '' : 's'} armed`,
-        body: `${this.platformSummary} • ${this.options.draft.includeGameplay ? 'Gameplay stack on' : 'Single-video layout'}`,
+        eyebrow: 'Targets',
+        title: `${this.options.manifests.length} output${this.options.manifests.length === 1 ? '' : 's'} ready`,
+        body: this.platformSummary || 'Choose a destination to create an output.',
       },
     ];
   }
