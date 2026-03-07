@@ -23,6 +23,12 @@ function sanitizeOverlayText(value) {
     .slice(0, 72);
 }
 
+function getAdaptiveFontSize(textValue, { base, floor }) {
+  const length = sanitizeOverlayText(textValue).length;
+  const overage = Math.max(0, length - 14);
+  return Math.max(floor, Math.round(base - overage * 1.05));
+}
+
 function buildRemoteUrl({ cloudName, remoteUrl, startOffset, duration, format = 'mp4' }) {
   const transform = [
     `so_${startOffset}`,
@@ -36,8 +42,31 @@ function buildRemoteUrl({ cloudName, remoteUrl, startOffset, duration, format = 
   return `https://res.cloudinary.com/${cloudName}/video/fetch/${transform}/${encodeURIComponent(remoteUrl)}${extension}`;
 }
 
+function buildRemotePreviewUrl({ cloudName, remoteUrl, startOffset, duration }) {
+  const transform = [
+    `so_${startOffset}`,
+    `du_${duration}`,
+    'f_auto',
+    'q_auto',
+  ].join(',');
+
+  return `https://res.cloudinary.com/${cloudName}/video/fetch/${transform}/${encodeURIComponent(remoteUrl)}.mp4`;
+}
+
 function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLines, poster = false, editingOptions = {} }) {
   const { shakingCaptions = false } = editingOptions;
+  const hookFontSize = getAdaptiveFontSize(hook, {
+    base: shakingCaptions ? 72 : 58,
+    floor: shakingCaptions ? 42 : 38,
+  });
+  const firstCaptionFontSize = getAdaptiveFontSize(captionLines?.[0], {
+    base: shakingCaptions ? 56 : 42,
+    floor: shakingCaptions ? 34 : 28,
+  });
+  const secondCaptionFontSize = getAdaptiveFontSize(captionLines?.[1], {
+    base: shakingCaptions ? 48 : 42,
+    floor: shakingCaptions ? 30 : 26,
+  });
 
   const render = cld
     .video(publicId)
@@ -50,14 +79,14 @@ function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLi
       source(
         text(
           sanitizeOverlayText(hook),
-          new TextStyle('Impact', 72).fontWeight('bold')
+          new TextStyle('Impact', hookFontSize).fontWeight('bold')
         ).textColor('#FFFF00').backgroundColor('#000000A0')
       ).position(new Position().gravity(compass('north')).offsetY(180))
     );
   } else if (hook) {
     render.overlay(
       source(
-        text(sanitizeOverlayText(hook), new TextStyle('Arial', 58).fontWeight('bold')).textColor('white')
+        text(sanitizeOverlayText(hook), new TextStyle('Arial', hookFontSize).fontWeight('bold')).textColor('white')
       ).position(new Position().gravity(compass('north')).offsetY(150))
     );
   }
@@ -67,7 +96,7 @@ function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLi
       source(
         text(
           sanitizeOverlayText(captionLines[0]),
-          new TextStyle('Impact', 56).fontWeight('bold')
+          new TextStyle('Impact', firstCaptionFontSize).fontWeight('bold')
         ).textColor('#FFFFFF').backgroundColor('#8B5CF6CC')
       ).position(new Position().gravity(compass('south')).offsetY(200))
     );
@@ -76,7 +105,7 @@ function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLi
         source(
           text(
             sanitizeOverlayText(captionLines[1]),
-            new TextStyle('Impact', 48).fontWeight('bold')
+            new TextStyle('Impact', secondCaptionFontSize).fontWeight('bold')
           ).textColor('#FFFFFF').backgroundColor('#8B5CF6CC')
         ).position(new Position().gravity(compass('south')).offsetY(130))
       );
@@ -84,21 +113,21 @@ function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLi
     } else if (captionLines?.[0]) {
       render.overlay(
         source(
-          text(sanitizeOverlayText(captionLines[0]), new TextStyle('Arial', 42).fontWeight('bold')).textColor('white')
+          text(sanitizeOverlayText(captionLines[0]), new TextStyle('Arial', firstCaptionFontSize).fontWeight('bold')).textColor('white')
         ).position(new Position().gravity(compass('south')).offsetY(captionLines[1] ? 230 : 170))
       );
 
       if (captionLines[1]) {
         render.overlay(
           source(
-            text(sanitizeOverlayText(captionLines[1]), new TextStyle('Arial', 42).fontWeight('bold')).textColor('white')
+            text(sanitizeOverlayText(captionLines[1]), new TextStyle('Arial', secondCaptionFontSize).fontWeight('bold')).textColor('white')
           ).position(new Position().gravity(compass('south')).offsetY(170))
         );
       }
     } else if (captionLines?.[1]) {
     render.overlay(
       source(
-        text(sanitizeOverlayText(captionLines[1]), new TextStyle('Arial', 42).fontWeight('bold')).textColor('white')
+        text(sanitizeOverlayText(captionLines[1]), new TextStyle('Arial', secondCaptionFontSize).fontWeight('bold')).textColor('white')
       ).position(new Position().gravity(compass('south')).offsetY(170))
     );
   }
@@ -108,6 +137,15 @@ function buildPublicClip({ cld, publicId, startOffset, duration, hook, captionLi
   }
 
   return render.delivery(format('mp4')).delivery(quality(autoQuality())).toURL();
+}
+
+function buildPublicPreviewClip({ cld, publicId, startOffset, duration }) {
+  return cld
+    .video(publicId)
+    .videoEdit(trim().startOffset(startOffset).duration(duration))
+    .delivery(format('mp4'))
+    .delivery(quality(autoQuality()))
+    .toURL();
 }
 
 export default function handler(req, res) {
@@ -139,6 +177,20 @@ export default function handler(req, res) {
 
     const plan = buildReelPlan({ transcriptText, sourceDurationSeconds: duration, visualAnalysis });
     const clips = plan.clips.map((clip) => {
+      const previewUrl = sourceMode === 'cloudinary-public-id' && publicId
+        ? buildPublicPreviewClip({
+          cld,
+          publicId,
+          startOffset: clip.startOffset,
+          duration: clip.duration,
+        })
+        : buildRemotePreviewUrl({
+          cloudName,
+          remoteUrl,
+          startOffset: clip.startOffset,
+          duration: clip.duration,
+        });
+
       const deliveryUrl = sourceMode === 'cloudinary-public-id' && publicId
         ? buildPublicClip({
           cld,
@@ -177,6 +229,7 @@ export default function handler(req, res) {
 
       return {
         ...clip,
+        previewUrl,
         deliveryUrl,
         posterUrl,
         downloadUrl: deliveryUrl,

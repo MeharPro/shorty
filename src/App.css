@@ -3091,6 +3091,16 @@
   color: #ffffff;
 }
 
+.reel-card-v2__expression em {
+  font-style: normal;
+  color: #93c5fd;
+  text-transform: uppercase;
+}
+
+.reel-card-v2__expression--compact {
+  margin-bottom: 8px;
+}
+
 .reel-card-v2__scores {
   display: flex;
   flex-wrap: wrap;
@@ -3118,12 +3128,23 @@
   width: 100%;
   height: 100%;
   display: flex;
+  overflow: hidden;
 }
 
 .face-detect-video__player {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  transform-origin: center center;
+  transition: transform 220ms ease-out, object-position 220ms ease-out;
+}
+
+.face-detect-video__player--dynamic {
+  animation: camera-drift 2.8s ease-in-out infinite;
+}
+
+.face-detect-video__player--shake {
+  animation: camera-shake 420ms steps(2, end) infinite;
 }
 
 .face-detect-video__overlay {
@@ -3155,10 +3176,12 @@
 
 .face-detect-video__caption-line {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   justify-content: center;
-  gap: 6px;
+  align-items: center;
+  gap: 4px;
   max-width: 88%;
+  width: min(88%, 100%);
   padding: 12px 14px;
   border-radius: 18px;
   background: rgba(8, 12, 24, 0.5);
@@ -3175,12 +3198,23 @@
   border: 1px solid rgba(139, 92, 246, 0.36);
 }
 
+.face-detect-video__caption-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .face-detect-video__caption-word {
   color: #f8fafc;
   font-weight: 800;
   line-height: 1.1;
   text-transform: uppercase;
   text-shadow: 0 3px 16px rgba(0, 0, 0, 0.45);
+  max-width: 100%;
+  word-break: break-word;
 }
 
 .face-detect-video__captions--clean .face-detect-video__caption-word {
@@ -3241,6 +3275,39 @@
 
   to {
     transform: scale(1.06);
+  }
+}
+
+@keyframes camera-drift {
+  0%,
+  100% {
+    transform: scale(1.08) translate3d(0, 0, 0);
+  }
+
+  50% {
+    transform: scale(1.12) translate3d(-1.5%, 0.8%, 0);
+  }
+}
+
+@keyframes camera-shake {
+  0% {
+    transform: scale(1.18) translate3d(0, 0, 0);
+  }
+
+  25% {
+    transform: scale(1.2) translate3d(-1.2%, 0.8%, 0);
+  }
+
+  50% {
+    transform: scale(1.18) translate3d(1.1%, -0.6%, 0);
+  }
+
+  75% {
+    transform: scale(1.2) translate3d(-0.7%, -1%, 0);
+  }
+
+  100% {
+    transform: scale(1.18) translate3d(0.6%, 0.4%, 0);
   }
 }
 

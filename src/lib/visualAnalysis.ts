@@ -16,6 +16,7 @@ interface ExpressionSample {
   surprise: number;
   emphasis: number;
   engagement: number;
+  groupEnergy: number;
   score: number;
 }
 
@@ -45,7 +46,7 @@ async function ensureLandmarker(): Promise<FaceLandmarker> {
           delegate: 'GPU',
         },
         runningMode: 'VIDEO',
-        numFaces: 1,
+        numFaces: 4,
         outputFaceBlendshapes: true,
       });
     })();
@@ -112,7 +113,7 @@ function getBlendshapeScore(categories: Category[], ...names: string[]): number 
   }, 0);
 }
 
-function toSampleScore(categories: Category[], faceCount: number, time: number): ExpressionSample {
+function toFaceMetrics(categories: Category[]) {
   const smile = Math.max(
     getBlendshapeScore(categories, 'mouthSmileLeft'),
     getBlendshapeScore(categories, 'mouthSmileRight')
@@ -136,19 +137,51 @@ function toSampleScore(categories: Category[], faceCount: number, time: number):
     0,
     1
   );
+
+  return {
+    smile,
+    surprise,
+    emphasis,
+    engagement,
+  };
+}
+
+function toSampleScore(faceCategories: Category[][], time: number): ExpressionSample {
+  const metrics = faceCategories.map((categories) => toFaceMetrics(categories));
+  const primary = metrics[0] ?? { smile: 0, surprise: 0, emphasis: 0, engagement: 0 };
+  const sum = metrics.reduce(
+    (acc, item) => ({
+      smile: acc.smile + item.smile,
+      surprise: acc.surprise + item.surprise,
+      emphasis: acc.emphasis + item.emphasis,
+      engagement: acc.engagement + item.engagement,
+    }),
+    { smile: 0, surprise: 0, emphasis: 0, engagement: 0 }
+  );
+  const count = Math.max(metrics.length, 1);
+  const groupEnergy = clamp(
+    (sum.engagement / count) * 0.65 + Math.min(metrics.length, 3) * 0.12,
+    0,
+    1
+  );
   const score = clamp(
-    engagement * 0.45 + surprise * 0.3 + emphasis * 0.18 + Math.min(faceCount, 1) * 0.07,
+    primary.engagement * 0.34 +
+      primary.surprise * 0.24 +
+      primary.emphasis * 0.14 +
+      groupEnergy * 0.2 +
+      Math.min(metrics.length, 3) * 0.05,
     0,
     1
   );
 
   return {
     time,
-    faceCount,
-    smile,
-    surprise,
-    emphasis,
-    engagement,
+    faceCount: metrics.length,
+    smile: primary.smile,
+    surprise: primary.surprise,
+    emphasis: primary.emphasis,
+    engagement: primary.engagement,
+    groupEnergy,
     score,
   };
 }
@@ -200,9 +233,10 @@ function mergeSamplesIntoHighlights(samples: ExpressionSample[], spacingSeconds:
         surprise: acc.surprise + item.surprise,
         emphasis: acc.emphasis + item.emphasis,
         engagement: acc.engagement + item.engagement,
+        groupEnergy: acc.groupEnergy + item.groupEnergy,
         faceCount: acc.faceCount + item.faceCount,
       }),
-      { score: 0, smile: 0, surprise: 0, emphasis: 0, engagement: 0, faceCount: 0 }
+      { score: 0, smile: 0, surprise: 0, emphasis: 0, engagement: 0, groupEnergy: 0, faceCount: 0 }
     );
 
     const count = buffer.length;
@@ -213,6 +247,7 @@ function mergeSamplesIntoHighlights(samples: ExpressionSample[], spacingSeconds:
       surprise: avg.surprise / count,
       emphasis: avg.emphasis / count,
       engagement: avg.engagement / count,
+      groupEnergy: avg.groupEnergy / count,
       score: avg.score / count,
     };
 
@@ -225,11 +260,16 @@ function mergeSamplesIntoHighlights(samples: ExpressionSample[], spacingSeconds:
       label: labelForExpression(dominant),
       dominantExpression: dominant,
       faceCount: Math.max(1, Math.round(averaged.faceCount)),
+      focusStrategy:
+        averaged.faceCount >= 4 ? 'group' : dominant === 'surprise' && averaged.faceCount >= 3 ? 'reaction' : 'speaker',
+      cameraMotion:
+        peak.score >= 0.78 ? 'shake' : averaged.faceCount >= 2 || peak.score >= 0.56 ? 'dynamic' : 'steady',
       metrics: {
         smile: round(averaged.smile),
         surprise: round(averaged.surprise),
         emphasis: round(averaged.emphasis),
         engagement: round(averaged.engagement),
+        groupEnergy: round(averaged.groupEnergy),
       },
     });
     buffer = [];
@@ -282,13 +322,15 @@ export async function analyzeVideoExpressions({
     for (const time of sampleTimes) {
       await seekVideo(video, time);
       const result = marker.detectForVideo(video, performance.now());
-      const categories = result.faceBlendshapes?.[0]?.categories ?? [];
+      const faceCategories = (result.faceBlendshapes ?? [])
+        .map((entry) => entry.categories ?? [])
+        .filter((categories) => categories.length > 0);
 
-      if (!categories.length) {
+      if (!faceCategories.length) {
         continue;
       }
 
-      samples.push(toSampleScore(categories, result.faceLandmarks?.length ?? 0, time));
+      samples.push(toSampleScore(faceCategories, time));
     }
 
     const averageScore = samples.length
