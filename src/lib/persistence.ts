@@ -160,6 +160,8 @@ export interface UploadHistoryItem {
   secureUrl: string;
   label: string;
   duration?: number;
+  width?: number;
+  height?: number;
   thumbnailUrl?: string;
   uploadedAt: string;
 }

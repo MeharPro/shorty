@@ -144,6 +144,7 @@ export interface AgentCommandResponse {
   feature: WorkflowFeatureId;
   model: string;
   fallbackUsed: boolean;
+  warning?: string;
   summary: string;
   validation: AgentValidationResult;
   retrievalHits: RetrievalHit[];

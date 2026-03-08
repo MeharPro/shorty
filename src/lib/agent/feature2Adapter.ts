@@ -1,3 +1,4 @@
+import { BRAINROT_GAMEPLAY_PRESETS } from '../brainrot';
 import type { CustomBlockDefinition, WorkflowGraph, WorkflowNode } from './types';
 
 interface Feature2CanvasNodeSnapshot {
@@ -31,6 +32,7 @@ interface Feature2WorkflowSnapshot {
   targetDurationSeconds: number;
   selectedVoiceId: string;
   selectedGameplayPresetId: string;
+  variantGameplayPresetIds?: string[];
   videoCount: number;
   renderState: string;
 }
@@ -92,6 +94,11 @@ export function buildFeature2WorkflowGraph(
             ...(node.id === 'gameplay'
               ? {
                   selectedGameplayPresetId: snapshot.selectedGameplayPresetId,
+                  variantGameplayPresetIds: snapshot.variantGameplayPresetIds ?? [],
+                  availableGameplayPresets: BRAINROT_GAMEPLAY_PRESETS.map((preset) => ({
+                    id: preset.id,
+                    label: preset.label,
+                  })),
                 }
               : {}),
           },
@@ -120,6 +127,38 @@ export function buildFeature2WorkflowGraph(
     source: nodeId,
     target: CORE_SEQUENCE[index + 1],
   }));
+  const customEdges = snapshot.canvasNodes.flatMap((node) => {
+    if (node.kind !== 'custom') {
+      return [];
+    }
+
+    const connectedNodeIds = [
+      ...new Set(node.agentBlock?.provenance?.backingCoreNodes?.filter((nodeId) => CORE_SEQUENCE.includes(nodeId)) ?? []),
+    ];
+
+    if (!connectedNodeIds.length) {
+      return [];
+    }
+
+    const [anchorNodeId, ...targetNodeIds] = connectedNodeIds;
+    const links = [
+      {
+        id: `${anchorNodeId}-${node.id}`,
+        source: anchorNodeId,
+        target: node.id,
+      },
+    ];
+
+    targetNodeIds.forEach((targetNodeId) => {
+      links.push({
+        id: `${node.id}-${targetNodeId}`,
+        source: node.id,
+        target: targetNodeId,
+      });
+    });
+
+    return links;
+  });
 
   return {
     feature: 'feature2',
@@ -127,7 +166,7 @@ export function buildFeature2WorkflowGraph(
     selectedNodeId: snapshot.selectedNodeId,
     activeStageId: snapshot.selectedNodeId,
     nodes,
-    edges,
+    edges: [...edges, ...customEdges],
     metadata: {
       promptInput: snapshot.promptInput,
       scriptGuidance: snapshot.scriptGuidance,
@@ -138,6 +177,11 @@ export function buildFeature2WorkflowGraph(
       targetDurationSeconds: snapshot.targetDurationSeconds,
       selectedVoiceId: snapshot.selectedVoiceId,
       selectedGameplayPresetId: snapshot.selectedGameplayPresetId,
+      variantGameplayPresetIds: snapshot.variantGameplayPresetIds ?? [],
+      availableGameplayPresets: BRAINROT_GAMEPLAY_PRESETS.map((preset) => ({
+        id: preset.id,
+        label: preset.label,
+      })),
       videoCount: snapshot.videoCount,
       renderState: snapshot.renderState,
     },

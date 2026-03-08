@@ -165,6 +165,16 @@ export interface Feature1EditingAdvice {
   viralStyle?: 'balanced' | 'aggressive';
 }
 
+export interface Feature1CropWindow {
+  start: number;
+  end: number;
+  cropX: number;
+  cropY: number;
+  cropWidth: number;
+  cropHeight: number;
+  speakerScore?: number;
+}
+
 export interface Feature1AgentPlan {
   model: string;
   summary: string;
@@ -281,6 +291,7 @@ export interface BrainrotSavedRender {
   subtitleAsset: BrainrotSubtitleAsset | null;
   voiceName: string;
   voiceProvider: string;
+  selectedGameplayPresetId?: BrainrotGameplayPresetId;
   gameplayLabel: string;
   typeLabel: string;
   durationSeconds: number;
@@ -296,6 +307,7 @@ export interface BrainrotHistoryEntry {
   targetDurationSeconds: number;
   selectedVoiceId: string;
   selectedGameplayPresetId: BrainrotGameplayPresetId;
+  variantGameplayPresetIds?: BrainrotGameplayPresetId[];
   selectedCaptionPresetId: BrainrotCaptionPresetId;
   gameplayStartOffset: number;
   runSignature: string;

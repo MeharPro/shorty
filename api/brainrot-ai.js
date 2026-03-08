@@ -1,4 +1,5 @@
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+import { generateStructuredJson } from '../lib/llmProvider.js';
+
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 
 function normalizeBody(body) {
@@ -23,21 +24,25 @@ function cleanText(value) {
     .trim();
 }
 
-function parseGeminiText(payload) {
-  const text = payload?.candidates?.[0]?.content?.parts
-    ?.map((part) => ('text' in part ? part.text : ''))
-    .join('')
+function normalizeComparableText(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
     .trim();
+}
 
-  if (!text) {
-    return null;
-  }
+function isMeaningfullyRewritten(original, next) {
+  const cleanOriginal = normalizeComparableText(original);
+  const cleanNext = normalizeComparableText(next);
 
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
+  return Boolean(cleanOriginal && cleanNext && cleanOriginal !== cleanNext);
+}
+
+function isMeaningfullyChanged(original, next) {
+  const cleanOriginal = normalizeComparableText(original);
+  const cleanNext = normalizeComparableText(next);
+
+  return Boolean(cleanNext && cleanOriginal !== cleanNext);
 }
 
 function titleCase(value) {
@@ -81,73 +86,156 @@ function buildFallbackSuggestion(prompt) {
   };
 }
 
+function buildFallbackEnhancedPrompt(prompt, brainrotType) {
+  const basePrompt = cleanText(prompt).replace(/[?!.]+$/g, '');
+  const fallbackStem = basePrompt || 'What hidden detail changes the whole story';
+
+  switch (cleanText(brainrotType || 'reddit-drama')) {
+    case 'conspiracy-spiral':
+      return `${fallbackStem}, and what missing detail makes the official version feel impossible to trust?`;
+    case 'motivation-shock':
+      return `${fallbackStem}, and what consequence makes ignoring it feel expensive?`;
+    case 'weird-facts':
+      return `${fallbackStem}, and what overlooked pattern makes it impossible to unsee?`;
+    case 'money-panic':
+      return `${fallbackStem}, and what cost shows up after people think it is already safe?`;
+    case 'subway-storytime':
+      return `${fallbackStem}, and which small mistake turned the whole story into a disaster?`;
+    case 'reddit-drama':
+    default:
+      return `${fallbackStem}, and which hidden detail made everyone realize it was worse than it sounded?`;
+  }
+}
+
+function buildFallbackEnhancedGuidance(scriptGuidance, brainrotType, previousScript) {
+  const typeId = cleanText(brainrotType || 'reddit-drama');
+  const hasPreviousScript = Boolean(cleanText(previousScript));
+
+  const typeBeat =
+    typeId === 'conspiracy-spiral'
+      ? 'Expose the suspicious pattern early, then reveal the missing piece that makes the timeline crack.'
+      : typeId === 'motivation-shock'
+        ? 'Hit the cost of the mistake immediately, then escalate into the consequence people usually avoid naming.'
+        : typeId === 'weird-facts'
+          ? 'Open with the strange behavior, then spell out the pattern that makes it feel impossible to ignore.'
+          : typeId === 'money-panic'
+            ? 'Set up the money mistake fast, then show the cost and why people miss it until it compounds.'
+            : 'Open with the setup in one line, reveal the hidden detail by the second beat, and land on the fallout that makes people pick a side.';
+
+  const revisionBeat = hasPreviousScript
+    ? 'Do not reuse the previous script wording. Keep the topic, but sharpen the conflict and payoff.'
+    : 'Keep the topic the same, but make the angle sharper and more specific.';
+
+  const guidance = cleanText(scriptGuidance);
+
+  if (!guidance) {
+    return `${typeBeat} ${revisionBeat} Keep it platform-agnostic and easy to caption in short bursts.`;
+  }
+
+  return `${guidance} ${typeBeat} ${revisionBeat}`.trim();
+}
+
+function buildEnhancePromptRequest(body, prompt, strictRewrite) {
+  return JSON.stringify(
+    {
+      task: strictRewrite
+        ? 'Rewrite the reel prompt so it is clearly different from the original while preserving the same topic.'
+        : 'Enhance the reel prompt and tighten script guidance.',
+      prompt,
+      previousPrompt: cleanText(body.previousPrompt),
+      scriptGuidance: cleanText(body.scriptGuidance),
+      previousScript: cleanText(body.previousScript),
+      brainrotType: cleanText(body.brainrotType || 'reddit-drama'),
+      templateId: cleanText(body.templateId || ''),
+      rewriteRequirements: strictRewrite
+        ? [
+            'Do not return the original prompt unchanged.',
+            'Keep the same concept, but rewrite the wording and add a sharper conflict, hidden detail, or consequence.',
+            'Make the rewritten prompt visibly different from the input in plain text.',
+          ]
+        : [
+            'Preserve the topic.',
+            'Make the prompt more specific, clickable, and easier to script.',
+          ],
+    },
+    null,
+    2
+  );
+}
+
+async function requestPromptEnhancement({ body, prompt, model, strictRewrite = false }) {
+  const generation = await generateStructuredJson({
+    model,
+    schemaName: 'brainrot_prompt_enhancement',
+    systemInstruction: [
+      'You improve short-form reel prompts and script guidance.',
+      'Preserve the core topic, but rewrite the prompt into a stronger, more specific hook.',
+      'The revised prompt must be materially different from the original wording and still feel platform-agnostic.',
+      'When a previous script is provided, use it to identify what to fix instead of changing the concept completely.',
+      'Return JSON only.',
+    ].join('\n'),
+    userPrompt: buildEnhancePromptRequest(body, prompt, strictRewrite),
+    schema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string' },
+        scriptGuidance: { type: 'string' },
+      },
+      required: ['prompt', 'scriptGuidance'],
+    },
+    thinkingBudget: 0,
+    temperature: strictRewrite ? 0.35 : 0.2,
+  });
+  const parsed = generation.data;
+
+  if (!parsed?.prompt || !parsed?.scriptGuidance) {
+    throw new Error('Model returned an invalid prompt enhancement payload.');
+  }
+
+  return {
+    prompt: cleanText(parsed.prompt),
+    scriptGuidance: cleanText(parsed.scriptGuidance),
+    warning: generation.warning,
+  };
+}
+
 async function handleGenerateNode({ prompt, model, apiKey }, res) {
   if (!prompt) {
     res.status(400).json({ error: 'Describe the node you want to add.' });
     return;
   }
 
-  if (!apiKey) {
+  if (!apiKey && !process.env.OPENROUTER_API_KEY) {
     res.status(200).json(buildFallbackSuggestion(prompt));
     return;
   }
 
   try {
-    const response = await fetch(`${GEMINI_API_URL}/${model}:generateContent`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
+    const generation = await generateStructuredJson({
+      model,
+      schemaName: 'brainrot_node_suggestion',
+      systemInstruction:
+        'You translate short reel-editing instructions into compact flowchart notes. Output JSON only. Keep it practical, editable, and concrete.',
+      userPrompt: [
+        `Instruction: ${prompt}`,
+        'Return JSON with:',
+        '- title: 2 to 5 words',
+        '- body: one short sentence describing the edit or effect',
+        '- color: a hex color that matches the note mood',
+      ].join('\n'),
+      schema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          body: { type: 'string' },
+          color: { type: 'string' },
+        },
+        required: ['title', 'body', 'color'],
       },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [
-            {
-              text:
-                'You translate short reel-editing instructions into compact flowchart notes. Output JSON only. Keep it practical, editable, and concrete.',
-            },
-          ],
-        },
-        contents: [
-          {
-            parts: [
-              {
-                text: [
-                  `Instruction: ${prompt}`,
-                  'Return JSON with:',
-                  '- title: 2 to 5 words',
-                  '- body: one short sentence describing the edit or effect',
-                  '- color: a hex color that matches the note mood',
-                ].join('\n'),
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseJsonSchema: {
-            type: 'object',
-            properties: {
-              title: { type: 'string' },
-              body: { type: 'string' },
-              color: { type: 'string' },
-            },
-            required: ['title', 'body', 'color'],
-          },
-          thinkingConfig: {
-            thinkingBudget: 0,
-          },
-        },
-      }),
+      thinkingBudget: 0,
+      temperature: 0.2,
     });
-
-    const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error?.message || 'Gemini failed to build the flowchart node.');
-    }
-
-    const parsed = parseGeminiText(payload);
+    const parsed = generation.data;
     const fallback = buildFallbackSuggestion(prompt);
 
     res.status(200).json({
@@ -156,6 +244,7 @@ async function handleGenerateNode({ prompt, model, apiKey }, res) {
       color: /^#([\da-f]{3}|[\da-f]{6})$/i.test(cleanText(parsed?.color))
         ? cleanText(parsed.color)
         : fallback.color,
+      warning: generation.warning,
     });
   } catch {
     res.status(200).json(buildFallbackSuggestion(prompt));
@@ -168,87 +257,54 @@ async function handleEnhancePrompt({ body, prompt, model, apiKey }, res) {
     return;
   }
 
-  if (!apiKey) {
-    res.status(503).json({ error: 'Gemini is not configured. Set GEMINI_API_KEY on the server.' });
+  if (!apiKey && !process.env.OPENROUTER_API_KEY) {
+    res.status(503).json({
+      error:
+        'Gemini and OpenRouter are not configured. Set GEMINI_API_KEY or OPENROUTER_API_KEY on the server.',
+    });
     return;
   }
 
   try {
-    const response = await fetch(`${GEMINI_API_URL}/${model}:generateContent`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [
-            {
-              text: [
-                'You improve short-form reel prompts and script guidance.',
-                'Preserve the core topic. Make the prompt more specific, clickable, and easier to script.',
-                'When a previous script is provided, use it to identify what to fix instead of changing the concept completely.',
-                'Keep the revised prompt concise and platform-agnostic.',
-                'Return JSON only.',
-              ].join('\n'),
-            },
-          ],
-        },
-        contents: [
-          {
-            parts: [
-              {
-                text: JSON.stringify(
-                  {
-                    task: 'Enhance the reel prompt and tighten script guidance.',
-                    prompt,
-                    previousPrompt: cleanText(body.previousPrompt),
-                    scriptGuidance: cleanText(body.scriptGuidance),
-                    previousScript: cleanText(body.previousScript),
-                    brainrotType: cleanText(body.brainrotType || 'reddit-drama'),
-                    templateId: cleanText(body.templateId || ''),
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseJsonSchema: {
-            type: 'object',
-            properties: {
-              prompt: { type: 'string' },
-              scriptGuidance: { type: 'string' },
-            },
-            required: ['prompt', 'scriptGuidance'],
-          },
-          thinkingConfig: {
-            thinkingBudget: 0,
-          },
-        },
-      }),
+    let enhanced = await requestPromptEnhancement({
+      body,
+      prompt,
+      model,
     });
 
-    const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error?.message || 'Gemini failed to enhance the prompt.');
+    if (!isMeaningfullyRewritten(prompt, enhanced.prompt)) {
+      try {
+        enhanced = await requestPromptEnhancement({
+          body,
+          prompt,
+          model,
+          strictRewrite: true,
+        });
+      } catch {
+        enhanced = {
+          prompt: '',
+          scriptGuidance: '',
+        };
+      }
     }
 
-    const parsed = parseGeminiText(payload);
-
-    if (!parsed?.prompt || !parsed?.scriptGuidance) {
-      throw new Error('Gemini returned an invalid prompt enhancement payload.');
-    }
+    const nextPrompt = isMeaningfullyRewritten(prompt, enhanced.prompt)
+      ? enhanced.prompt
+      : buildFallbackEnhancedPrompt(prompt, body.brainrotType);
+    const nextScriptGuidance = isMeaningfullyChanged(body.scriptGuidance, enhanced.scriptGuidance)
+      ? enhanced.scriptGuidance
+      : buildFallbackEnhancedGuidance(
+          body.scriptGuidance,
+          body.brainrotType,
+          body.previousScript
+        );
 
     res.status(200).json({
       model,
-      prompt: cleanText(parsed.prompt),
-      scriptGuidance: cleanText(parsed.scriptGuidance),
+      prompt: nextPrompt,
+      scriptGuidance: nextScriptGuidance,
       generatedAt: new Date().toISOString(),
+      warning: enhanced.warning,
     });
   } catch (error) {
     res.status(500).json({

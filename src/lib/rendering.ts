@@ -68,7 +68,7 @@ export function createRemoteMediaAsset(url: string, label: string): MediaAsset {
 }
 
 export function buildPlayableSourceUrl(asset: MediaAsset): string {
-  if (isRemoteAsset(asset)) {
+  if (asset.secureUrl) {
     return asset.secureUrl;
   }
 

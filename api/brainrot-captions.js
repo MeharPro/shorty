@@ -28,6 +28,9 @@ function clamp(value, min, max, fallback) {
   return Math.min(max, Math.max(min, parsed));
 }
 
+const CUE_LINE_CHARACTER_LIMIT = 18;
+const CUE_MAX_LINES = 3;
+
 function formatSrtTimestamp(totalSeconds) {
   const safeMilliseconds = Math.max(0, Math.round(totalSeconds * 1000));
   const hours = Math.floor(safeMilliseconds / 3600000);
@@ -43,7 +46,27 @@ function formatSrtTimestamp(totalSeconds) {
 }
 
 function splitCueLines(words) {
-  return words.join(' ');
+  const lines = [];
+  let current = '';
+
+  words.forEach((word) => {
+    const candidate = current ? `${current} ${word}` : word;
+    const canWrap = lines.length < CUE_MAX_LINES - 1;
+
+    if (candidate.length > CUE_LINE_CHARACTER_LIMIT && current && canWrap) {
+      lines.push(current);
+      current = word;
+      return;
+    }
+
+    current = candidate;
+  });
+
+  if (current) {
+    lines.push(current);
+  }
+
+  return lines.join('\n');
 }
 
 function normalizeWordTimings(input) {
