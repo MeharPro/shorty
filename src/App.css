@@ -3937,6 +3937,203 @@
   aspect-ratio: 16 / 9;
 }
 
+.workflow-sidebar-tabs {
+  display: grid;
+  gap: 16px;
+}
+
+.workflow-sidebar-tabs__rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.workflow-sidebar-tabs__tab {
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.workflow-sidebar-tabs__tab:hover {
+  transform: translateY(-1px);
+  border-color: rgba(99, 102, 241, 0.28);
+}
+
+.workflow-sidebar-tabs__tab--active {
+  background: rgba(99, 102, 241, 0.14);
+  border-color: rgba(99, 102, 241, 0.34);
+  color: var(--text-primary);
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.12);
+}
+
+.workflow-sidebar-tabs__panel {
+  min-width: 0;
+}
+
+.flow-inspector--tabs .workflow-sidebar-tabs__panel,
+.workflow-sidebar-tabs--brainrot .workflow-sidebar-tabs__panel {
+  display: grid;
+  gap: 16px;
+}
+
+.agent-chat-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.agent-chat-panel__header h2 {
+  margin: 4px 0 8px;
+}
+
+.agent-chat-panel__header p,
+.agent-chat-panel__status,
+.agent-chat-panel__message p,
+.agent-chat-panel__card p,
+.agent-chat-panel__list-item span {
+  color: var(--text-secondary);
+}
+
+.agent-chat-panel__status {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.82rem;
+}
+
+.agent-chat-panel__messages {
+  display: grid;
+  gap: 12px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.agent-chat-panel__message {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.agent-chat-panel__message--assistant {
+  background:
+    linear-gradient(180deg, rgba(99, 102, 241, 0.12), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.03);
+}
+
+.agent-chat-panel__message-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.agent-chat-panel__message p {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.agent-chat-panel__composer {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-chat-panel__composer span,
+.agent-chat-panel__section h3 {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+}
+
+.agent-chat-panel__composer textarea {
+  width: 100%;
+  min-height: 108px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.78);
+  color: var(--text-primary);
+  resize: vertical;
+}
+
+.agent-chat-panel__actions,
+.agent-chat-panel__list,
+.agent-chat-panel__insights,
+.agent-chat-panel__section {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-chat-panel__actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-chat-panel__error {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(239, 68, 68, 0.18);
+  background: rgba(239, 68, 68, 0.08);
+  color: #fecaca;
+}
+
+.agent-chat-panel__card,
+.agent-chat-panel__list-item,
+.agent-chat-panel__candidate {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.agent-chat-panel__card span,
+.agent-chat-panel__list-item strong,
+.agent-chat-panel__candidate strong {
+  color: var(--text-primary);
+}
+
+.agent-chat-panel__candidate {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.agent-chat-panel__candidate--selected {
+  border-color: rgba(16, 185, 129, 0.26);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.brainrot-builder__aside--tabs {
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .agent-chat-panel__actions {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 900px) {
   .brainrot-type-grid,
   .brainrot-option-grid {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
@@ -7,6 +7,8 @@ import type {
 import { createPortal } from 'react-dom';
 import { Link, Navigate } from 'react-router-dom';
 import boltLogo from '../assets/bolt-logo.png';
+import { AgentChatPanel } from '../components/agent/AgentChatPanel';
+import { WorkflowSidebarTabs } from '../components/agent/WorkflowSidebarTabs';
 import {
   BRAINROT_FRAME_HEIGHT,
   BRAINROT_FRAME_WIDTH,
@@ -49,6 +51,10 @@ import {
   type BrainrotVoiceResponse,
   type BrainrotVoiceSettings,
 } from '../lib/brainrot';
+import { buildFeature2WorkflowGraph } from '../lib/agent/feature2Adapter';
+import { downloadJsonFile } from '../lib/agent/export';
+import type { AgentCommandResponse, CustomBlockDefinition } from '../lib/agent/types';
+import { useWorkflowAgent } from '../lib/agent/useWorkflowAgent';
 import { buildPlayableSourceUrl } from '../lib/rendering';
 import type { ShortySession } from '../lib/session';
 import type { MediaAsset } from '../types';
@@ -120,6 +126,7 @@ interface CustomCanvasNode {
   title: string;
   body: string;
   color: string;
+  agentBlock?: CustomBlockDefinition | null;
 }
 
 type CanvasNode = CoreCanvasNode | CustomCanvasNode;
@@ -156,6 +163,7 @@ const DEFAULT_BATCH_SETTINGS: BrainrotBatchSettings = {
   partLabelsEnabled: false,
   scriptVariationMode: 'different-scripts',
 };
+const WORKFLOW_AGENT_ENABLED = import.meta.env.VITE_ENABLE_WORKFLOW_AGENT !== 'false';
 const CAPTION_GUIDE_LINE_LIMIT = 22;
 const CAPTION_GUIDE_MAX_LINES = 3;
 const CAPTION_PREVIEW_FONT_SCALE = 0.62;
@@ -851,7 +859,7 @@ function CanvasCustomNode({
       }}
     >
       <div className="brainrot-node__header">
-        <span className="brainrot-node__step">Freeform</span>
+        <span className="brainrot-node__step">{node.agentBlock ? 'Agent block' : 'Freeform'}</span>
         <div className="brainrot-node__actions">
           <span className="brainrot-custom-node__swatch" style={{ backgroundColor: node.color }} />
           <button
@@ -880,6 +888,7 @@ function CanvasCustomNode({
 }
 
 export function Feature2Page({ session }: Feature2PageProps) {
+  const sessionUserKey = session?.userKey;
   const defaultTemplate =
     BRAINROT_TEMPLATE_PRESETS.find((preset) => preset.id === DEFAULT_TEMPLATE_ID) ??
     BRAINROT_TEMPLATE_PRESETS[0];
@@ -961,6 +970,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
     useState<BrainrotBatchSettings>(DEFAULT_BATCH_SETTINGS);
   const [aiNodePrompt, setAiNodePrompt] = useState('');
   const [isAiNodeGenerating, setIsAiNodeGenerating] = useState(false);
+  const [pendingAgentRun, setPendingAgentRun] = useState<{
+    shouldRun: boolean;
+    notes: string[];
+  } | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([
     createLogEntry('Brain Rot workspace booted. Prompt, script, and render nodes are ready.', 'info'),
   ]);
@@ -1670,10 +1683,6 @@ export function Feature2Page({ session }: Feature2PageProps) {
     : 'Edit the freeform note, move it, or remove it from the canvas.';
   const selectedNodeCode = selectedCoreStage ? coreFlowMap[selectedCoreStage]?.code : '';
 
-  if (!session) {
-    return <Navigate replace to="/login" />;
-  }
-
   const openNodeEditor = (id: CanvasSelectionId) => {
     if (!canvasNodes.some((node) => node.id === id)) {
       return;
@@ -1757,6 +1766,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
     body: string;
     color: string;
     logMessage: string;
+    agentBlock?: CustomBlockDefinition | null;
   }) => {
     const customNodeCount = canvasNodes.filter(isCustomCanvasNode).length;
     const canvasStage = canvasStageRef.current;
@@ -1782,6 +1792,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       title: input.title,
       body: input.body,
       color: input.color,
+      agentBlock: input.agentBlock ?? null,
     };
 
     setCanvasNodes((current) => [...current, nextNode]);
@@ -2586,6 +2597,352 @@ export function Feature2Page({ session }: Feature2PageProps) {
     });
   };
 
+  const buildCurrentWorkflowGraph = useCallback(
+    () =>
+      buildFeature2WorkflowGraph({
+        selectedNodeId: String(selectedNode),
+        canvasNodes,
+        stages: coreFlowModels.map((stage) => ({
+          id: stage.id,
+          title: stage.title,
+          summary: stage.summary,
+          code: stage.code,
+        })),
+        promptInput,
+        scriptGuidance,
+        captionText,
+        targetDurationSeconds,
+        selectedVoiceId,
+        selectedGameplayPresetId,
+        videoCount: batchSettings.videoCount,
+        renderState,
+      }),
+    [
+      batchSettings.videoCount,
+      canvasNodes,
+      captionText,
+      coreFlowModels,
+      promptInput,
+      renderState,
+      scriptGuidance,
+      selectedGameplayPresetId,
+      selectedNode,
+      selectedVoiceId,
+      targetDurationSeconds,
+    ]
+  );
+
+  const applyFeature2AgentResponse = useCallback(
+    async (response: AgentCommandResponse) => {
+      if (!response.validation.ok) {
+        throw new Error(response.validation.issues.join(' ') || 'Agent plan failed validation.');
+      }
+
+      const knownNodeIds = new Set(canvasNodes.map((node) => node.id));
+      const validationIssues: string[] = [];
+
+      response.actions.forEach((action) => {
+        if (
+          (action.type === 'set_active_stage' ||
+            action.type === 'update_node_params' ||
+            action.type === 'update_custom_block' ||
+            action.type === 'remove_custom_block') &&
+          action.targetNodeId &&
+          !knownNodeIds.has(action.targetNodeId)
+        ) {
+          validationIssues.push(`Unknown node target: ${action.targetNodeId}`);
+        }
+
+        if (action.type === 'create_custom_block' && !action.customBlock) {
+          validationIssues.push('Planner requested a custom block without a definition.');
+        }
+      });
+
+      if (validationIssues.length > 0) {
+        throw new Error(validationIssues.join(' '));
+      }
+
+      let nextSelectedNode: CanvasSelectionId = selectedNode;
+      let nextCanvasNodes = [...canvasNodes];
+      let nextPromptInput = promptInput;
+      let nextScriptGuidance = scriptGuidance;
+      let nextCaptionText = captionText;
+      let nextManualCaptionMode = manualCaptionMode;
+      let nextTargetDuration = targetDurationSeconds;
+      let nextBatchSettings = { ...batchSettings };
+      let nextVoiceFilterMode = voiceFilterMode;
+      let nextSelectedVoiceId = selectedVoiceId;
+      let nextSelectedGameplayPresetId = selectedGameplayPresetId;
+      let nextGameplayOffset = gameplayStartOffset;
+      let nextGameplayGravity = layoutStyle.gameplayGravity;
+      let shouldRun = response.execution.shouldRun;
+
+      const buildAgentCustomNode = (block: CustomBlockDefinition) => {
+        const customNodeCount = nextCanvasNodes.filter(isCustomCanvasNode).length;
+        const canvasStage = canvasStageRef.current;
+        const viewportCenterX = canvasStage
+          ? (canvasStage.scrollLeft + canvasStage.clientWidth / 2) / canvasZoom
+          : canvasSize.width / 2;
+        const viewportCenterY = canvasStage
+          ? (canvasStage.scrollTop + canvasStage.clientHeight / 2) / canvasZoom
+          : canvasSize.height / 2;
+
+        return {
+          id: `custom-${crypto.randomUUID()}`,
+          kind: 'custom' as const,
+          x: clamp(
+            Math.round(viewportCenterX - CUSTOM_NODE_WIDTH / 2 + customNodeCount * 14),
+            CANVAS_PADDING,
+            canvasSize.width - CUSTOM_NODE_WIDTH - CANVAS_PADDING
+          ),
+          y: clamp(
+            Math.round(viewportCenterY - CUSTOM_NODE_HEIGHT / 2 + customNodeCount * 14),
+            CANVAS_PADDING,
+            canvasSize.height - CUSTOM_NODE_HEIGHT - CANVAS_PADDING
+          ),
+          title: block.blockName,
+          body: block.description,
+          color: '#f97316',
+          agentBlock: block,
+        };
+      };
+
+      response.actions.forEach((action) => {
+        if (action.type === 'set_active_stage' && action.targetNodeId) {
+          nextSelectedNode = action.targetNodeId;
+          return;
+        }
+
+        if (action.type === 'set_prompt_value' && typeof action.params?.prompt === 'string') {
+          nextPromptInput = action.params.prompt;
+          return;
+        }
+
+        if (
+          action.type === 'set_script_guidance' &&
+          typeof action.params?.scriptGuidance === 'string'
+        ) {
+          nextScriptGuidance = action.params.scriptGuidance;
+          return;
+        }
+
+        if (action.type === 'set_caption_text' && typeof action.params?.captionText === 'string') {
+          nextCaptionText = action.params.captionText;
+          nextManualCaptionMode = true;
+          return;
+        }
+
+        if (action.type === 'set_target_duration') {
+          nextTargetDuration = clamp(
+            Number(action.params?.targetDurationSeconds || nextTargetDuration),
+            TARGET_DURATION_MIN,
+            TARGET_DURATION_MAX
+          );
+          return;
+        }
+
+        if (action.type === 'set_variant_count') {
+          const count = normalizeBatchVideoCount(Number(action.params?.count || 1));
+          nextBatchSettings = {
+            ...nextBatchSettings,
+            videoCount: count,
+            partLabelsEnabled: count > 1,
+            scriptVariationMode: count > 1 ? 'different-scripts' : nextBatchSettings.scriptVariationMode,
+          };
+          return;
+        }
+
+        if (action.type === 'queue_execution') {
+          shouldRun = true;
+          return;
+        }
+
+        if (action.type === 'create_custom_block' && action.customBlock) {
+          const nextNode = buildAgentCustomNode(action.customBlock);
+          nextCanvasNodes = [...nextCanvasNodes, nextNode];
+          nextSelectedNode = nextNode.id;
+          return;
+        }
+
+        if (action.type === 'update_custom_block' && action.targetNodeId) {
+          nextCanvasNodes = nextCanvasNodes.map((node) =>
+            node.id === action.targetNodeId && node.kind === 'custom'
+              ? {
+                  ...node,
+                  title: typeof action.params?.label === 'string' ? action.params.label : node.title,
+                  body: typeof action.params?.description === 'string' ? action.params.description : node.body,
+                }
+              : node
+          );
+          nextSelectedNode = action.targetNodeId;
+          return;
+        }
+
+        if (action.type === 'remove_custom_block' && action.targetNodeId) {
+          nextCanvasNodes = nextCanvasNodes.filter((node) => node.id !== action.targetNodeId);
+          if (nextSelectedNode === action.targetNodeId) {
+            nextSelectedNode = 'render';
+          }
+          return;
+        }
+
+        if (action.type === 'update_node_params' && action.targetNodeId === 'voice') {
+          if (
+            action.params?.voiceFilterMode === 'recommended' ||
+            action.params?.voiceFilterMode === 'expressive-female' ||
+            action.params?.voiceFilterMode === 'expressive-male' ||
+            action.params?.voiceFilterMode === 'all' ||
+            action.params?.voiceFilterMode === 'cloned'
+          ) {
+            nextVoiceFilterMode = action.params.voiceFilterMode;
+          }
+
+          if (typeof action.params?.selectedVoiceId === 'string') {
+            const voiceExists = voices.some((voice) => voice.id === action.params?.selectedVoiceId);
+            if (voiceExists) {
+              nextSelectedVoiceId = action.params.selectedVoiceId;
+            }
+          }
+
+          if (action.params?.voicePreference === 'female') {
+            nextVoiceFilterMode = 'expressive-female';
+            nextSelectedVoiceId = pickRecommendedVoiceId(voices, 'female');
+          }
+
+          if (action.params?.voicePreference === 'male') {
+            nextVoiceFilterMode = 'expressive-male';
+            nextSelectedVoiceId = pickRecommendedVoiceId(voices, 'male');
+          }
+
+          return;
+        }
+
+        if (action.type === 'update_node_params' && action.targetNodeId === 'gameplay') {
+          if (typeof action.params?.gameplayPresetId === 'string') {
+            const preset =
+              BRAINROT_GAMEPLAY_PRESETS.find((entry) => entry.id === action.params?.gameplayPresetId) ??
+              null;
+            if (preset) {
+              nextSelectedGameplayPresetId = preset.id;
+              nextGameplayOffset = preset.defaultOffset;
+              nextGameplayGravity = preset.defaultGravity;
+            }
+          }
+          return;
+        }
+
+        if (action.type === 'update_node_params' && action.targetNodeId === 'caption') {
+          if (typeof action.params?.captionText === 'string') {
+            nextCaptionText = action.params.captionText;
+            nextManualCaptionMode = true;
+          }
+          return;
+        }
+
+        if (action.type === 'update_node_params' && action.targetNodeId === 'prompt') {
+          if (typeof action.params?.prompt === 'string') {
+            nextPromptInput = action.params.prompt;
+          }
+          return;
+        }
+
+        if (action.type === 'update_node_params' && action.targetNodeId === 'script') {
+          if (typeof action.params?.scriptGuidance === 'string') {
+            nextScriptGuidance = action.params.scriptGuidance;
+          }
+        }
+      });
+
+      setCanvasNodes(nextCanvasNodes);
+      setSelectedNode(nextSelectedNode);
+      setPromptInput(nextPromptInput);
+      setScriptGuidance(nextScriptGuidance);
+      setCaptionText(nextCaptionText);
+      setManualCaptionMode(nextManualCaptionMode);
+      setTargetDurationSeconds(nextTargetDuration);
+      setBatchSettings(nextBatchSettings);
+      setVoiceFilterMode(nextVoiceFilterMode);
+      setSelectedVoiceId(nextSelectedVoiceId);
+      setSelectedGameplayPresetId(nextSelectedGameplayPresetId);
+      setGameplayStartOffset(nextGameplayOffset);
+      setLayoutStyle((current) => ({
+        ...current,
+        gameplayGravity: nextGameplayGravity,
+      }));
+      setStatusMessage(response.summary);
+      appendLog(response.summary, 'info');
+      setPendingAgentRun(
+        shouldRun
+          ? {
+              shouldRun: true,
+              notes: response.execution.notes,
+            }
+          : null
+      );
+
+      if (nextSelectedGameplayPresetId !== selectedGameplayPresetId) {
+        const preset =
+          BRAINROT_GAMEPLAY_PRESETS.find((entry) => entry.id === nextSelectedGameplayPresetId) ??
+          BRAINROT_GAMEPLAY_PRESETS[0];
+
+        if (preset.source === 'local') {
+          void prepareGameplay({ quiet: true });
+        } else if (preset.id !== 'custom-remote') {
+          void prepareBuiltInRemoteGameplay(preset, { quiet: true });
+        }
+      }
+
+      return shouldRun
+        ? 'Queued an automatic run through the current Feature 2 pipeline.'
+        : `Applied ${response.actions.length} validated workflow action${response.actions.length === 1 ? '' : 's'}.`;
+    },
+    [
+      batchSettings,
+      canvasNodes,
+      canvasSize.height,
+      canvasSize.width,
+      canvasZoom,
+      captionText,
+      gameplayStartOffset,
+      layoutStyle.gameplayGravity,
+      manualCaptionMode,
+      prepareBuiltInRemoteGameplay,
+      prepareGameplay,
+      promptInput,
+      scriptGuidance,
+      selectedGameplayPresetId,
+      selectedNode,
+      selectedVoiceId,
+      targetDurationSeconds,
+      voiceFilterMode,
+      voices,
+    ]
+  );
+
+  const workflowAgent = useWorkflowAgent({
+    feature: 'feature2',
+    sessionUserKey,
+    getWorkflowGraph: buildCurrentWorkflowGraph,
+    applyResponse: applyFeature2AgentResponse,
+  });
+
+  useEffect(() => {
+    if (!pendingAgentRun?.shouldRun) {
+      return;
+    }
+
+    const execution = pendingAgentRun;
+    setPendingAgentRun(null);
+
+    void (async () => {
+      appendLog('Agent requested an automatic run through the current pipeline.', 'info');
+      await handleRun();
+      if (execution.notes.length) {
+        appendLog(execution.notes.join(' '), 'info');
+      }
+    })();
+  }, [appendLog, handleRun, pendingAgentRun]);
+
   const coreLinkPaths = CORE_NODE_ORDER.slice(0, -1).map((fromId, index) => {
     const toId = CORE_NODE_ORDER[index + 1];
     const fromNode = canvasNodes.find((node) => node.id === fromId);
@@ -2597,6 +2954,12 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
     return createCoreLinkPath(fromNode, toNode);
   });
+
+  if (!session) {
+    return <Navigate replace to="/login" />;
+  }
+
+  const feature2Workflow = buildCurrentWorkflowGraph();
 
   return (
     <div className="feature-page feature-page--wide">
@@ -3878,6 +4241,17 @@ export function Feature2Page({ session }: Feature2PageProps) {
                     />
                   </div>
                 </label>
+                {selectedCustomNode.agentBlock ? (
+                  <div className="brainrot-static-card">
+                    <span>Agent provenance</span>
+                    <strong>{selectedCustomNode.agentBlock.blockName}</strong>
+                    <p>{selectedCustomNode.agentBlock.provenance.creationReason}</p>
+                    <p>
+                      Backing nodes:{' '}
+                      {selectedCustomNode.agentBlock.provenance.backingCoreNodes.join(', ') || 'workflow graph'}
+                    </p>
+                  </div>
+                ) : null}
                 <div className="brainrot-action-row">
                   <button
                     className="btn btn--ghost"
@@ -3896,211 +4270,262 @@ export function Feature2Page({ session }: Feature2PageProps) {
             : null}
         </div>
 
-        <aside className="brainrot-builder__aside">
-          <article className="brainrot-surface">
-            <div className="brainrot-surface__header">
-              <div>
-                <span className="brainrot-surface__eyebrow">Output</span>
-                <h2>Rendered reel</h2>
-                <p>Preview the final Cloudinary output with the AI voice baked in.</p>
-              </div>
-              <span
-                className={`brainrot-status-pill brainrot-status-pill--${
-                  renderState === 'complete' && !isRenderDirty
-                    ? 'complete'
-                    : renderState === 'running'
-                      ? 'running'
-                      : renderState === 'error'
-                        ? 'error'
-                        : 'ready'
-                }`}
-              >
-                {renderState === 'complete' && !isRenderDirty
-                  ? 'fresh'
-                  : renderState === 'running'
-                    ? 'running'
-                    : isRenderDirty
-                      ? 'stale'
-                      : 'idle'}
-              </span>
-            </div>
+        <aside className="brainrot-builder__aside brainrot-builder__aside--tabs">
+          <WorkflowSidebarTabs
+            className="workflow-sidebar-tabs workflow-sidebar-tabs--brainrot"
+            defaultTabId={WORKFLOW_AGENT_ENABLED ? 'agent' : 'output'}
+            tabs={[
+              ...(WORKFLOW_AGENT_ENABLED
+                ? [
+                    {
+                      id: 'agent',
+                      label: 'Agent',
+                      content: (
+                        <article className="brainrot-surface">
+                          <AgentChatPanel
+                            title="Agent-controlled brainrot flow"
+                            subtitle="Describe the mutation you want. The agent rewires the graph, then uses the existing run path automatically."
+                            draft={workflowAgent.draft}
+                            isBusy={workflowAgent.isBusy}
+                            status={workflowAgent.status}
+                            error={workflowAgent.error}
+                            messages={workflowAgent.messages}
+                            response={workflowAgent.lastResponse}
+                            workflow={feature2Workflow}
+                            executionPlan={workflowAgent.lastResponse}
+                            onDraftChange={workflowAgent.setDraft}
+                            onSend={() => void workflowAgent.send()}
+                            onExportWorkflow={() =>
+                              downloadJsonFile(
+                                `feature2-workflow-${new Date().toISOString()}.json`,
+                                feature2Workflow
+                              )
+                            }
+                            onExportPlan={() =>
+                              workflowAgent.lastResponse
+                                ? downloadJsonFile(
+                                    `feature2-agent-plan-${new Date().toISOString()}.json`,
+                                    workflowAgent.lastResponse
+                                  )
+                                : undefined
+                            }
+                          />
+                        </article>
+                      ),
+                    },
+                  ]
+                : []),
+              {
+                  id: 'output',
+                  label: 'Output',
+                  content: (
+                    <article className="brainrot-surface">
+                      <div className="brainrot-surface__header">
+                        <div>
+                          <span className="brainrot-surface__eyebrow">Output</span>
+                          <h2>Rendered reel</h2>
+                          <p>Preview the final Cloudinary output with the AI voice baked in.</p>
+                        </div>
+                        <span
+                          className={`brainrot-status-pill brainrot-status-pill--${
+                            renderState === 'complete' && !isRenderDirty
+                              ? 'complete'
+                              : renderState === 'running'
+                                ? 'running'
+                                : renderState === 'error'
+                                  ? 'error'
+                                  : 'ready'
+                          }`}
+                        >
+                          {renderState === 'complete' && !isRenderDirty
+                            ? 'fresh'
+                            : renderState === 'running'
+                              ? 'running'
+                              : isRenderDirty
+                                ? 'stale'
+                                : 'idle'}
+                        </span>
+                      </div>
 
-            <div className="brainrot-output-frame">
-              {generatedRender ? (
-                <video
-                  key={generatedRender.deliveryUrl}
-                  autoPlay
-                  controls
-                  loop
-                  playsInline
-                  poster={generatedRender.posterUrl}
-                  src={generatedRender.deliveryUrl}
-                />
-              ) : captionLayoutPreviewUrl ? (
-                <video
-                  autoPlay
-                  loop
-                  muted
-                  playsInline
-                  src={captionLayoutPreviewUrl}
-                />
-              ) : (
-                <div className="brainrot-empty-state brainrot-empty-state--tall">
-                  Run the graph to generate the AI reel.
-                </div>
-              )}
-            </div>
+                      <div className="brainrot-output-frame">
+                        {generatedRender ? (
+                          <video
+                            key={generatedRender.deliveryUrl}
+                            autoPlay
+                            controls
+                            loop
+                            playsInline
+                            poster={generatedRender.posterUrl}
+                            src={generatedRender.deliveryUrl}
+                          />
+                        ) : captionLayoutPreviewUrl ? (
+                          <video autoPlay loop muted playsInline src={captionLayoutPreviewUrl} />
+                        ) : (
+                          <div className="brainrot-empty-state brainrot-empty-state--tall">
+                            Run the graph to generate the AI reel.
+                          </div>
+                        )}
+                      </div>
 
-            {generatedRenders.length > 1 ? (
-              <div className="brainrot-render-picker">
-                {generatedRenders.map((render, index) => (
-                  <button
-                    key={render.id}
-                    className={`brainrot-render-chip ${
-                      index === selectedGeneratedRenderIndex ? 'brainrot-render-chip--active' : ''
-                    }`}
-                    type="button"
-                    onClick={() => setSelectedGeneratedRenderIndex(index)}
-                  >
-                    <span>{render.label}</span>
-                    <strong>{render.script.title}</strong>
-                  </button>
-                ))}
-              </div>
-            ) : null}
+                      {generatedRenders.length > 1 ? (
+                        <div className="brainrot-render-picker">
+                          {generatedRenders.map((render, index) => (
+                            <button
+                              key={render.id}
+                              className={`brainrot-render-chip ${
+                                index === selectedGeneratedRenderIndex ? 'brainrot-render-chip--active' : ''
+                              }`}
+                              type="button"
+                              onClick={() => setSelectedGeneratedRenderIndex(index)}
+                            >
+                              <span>{render.label}</span>
+                              <strong>{render.script.title}</strong>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
 
-            <div className="brainrot-mini-grid">
-              <div className="brainrot-mini-card">
-                <span>Voice</span>
-                <strong>
-                  {generatedRender?.voiceName ?? selectedVoice.name}
-                  {generatedRender
-                    ? ` • ${generatedRender.voiceProvider === 'google-ai' ? 'Google AI' : 'ElevenLabs'}`
-                    : ''}
-                </strong>
-              </div>
-              <div className="brainrot-mini-card">
-                <span>Duration</span>
-                <strong>{formatDuration(generatedRender?.durationSeconds)}</strong>
-              </div>
-              <div className="brainrot-mini-card">
-                <span>Gameplay</span>
-                <strong>{generatedRender?.gameplayLabel ?? gameplayAsset?.label ?? selectedGameplayPreset.label}</strong>
-              </div>
-              <div className="brainrot-mini-card">
-                <span>Batch</span>
-                <strong>{generatedRenders.length || batchSettings.videoCount} output(s)</strong>
-              </div>
-            </div>
+                      <div className="brainrot-mini-grid">
+                        <div className="brainrot-mini-card">
+                          <span>Voice</span>
+                          <strong>
+                            {generatedRender?.voiceName ?? selectedVoice.name}
+                            {generatedRender
+                              ? ` • ${generatedRender.voiceProvider === 'google-ai' ? 'Google AI' : 'ElevenLabs'}`
+                              : ''}
+                          </strong>
+                        </div>
+                        <div className="brainrot-mini-card">
+                          <span>Duration</span>
+                          <strong>{formatDuration(generatedRender?.durationSeconds)}</strong>
+                        </div>
+                        <div className="brainrot-mini-card">
+                          <span>Gameplay</span>
+                          <strong>{generatedRender?.gameplayLabel ?? gameplayAsset?.label ?? selectedGameplayPreset.label}</strong>
+                        </div>
+                        <div className="brainrot-mini-card">
+                          <span>Batch</span>
+                          <strong>{generatedRenders.length || batchSettings.videoCount} output(s)</strong>
+                        </div>
+                      </div>
 
-            {generatedRender ? (
-              <>
-                <div className="brainrot-action-row">
-                  <a
-                    className="btn btn--ghost"
-                    href={generatedRender.deliveryUrl}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    Open render
-                  </a>
-                  <a
-                    className="btn btn--ghost"
-                    href={generatedRender.audioAsset.secureUrl}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    Open voice track
-                  </a>
-                  {generatedRender.subtitleAsset ? (
-                    <a
-                      className="btn btn--ghost"
-                      href={generatedRender.subtitleAsset.secureUrl}
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      Open captions
-                    </a>
-                  ) : null}
-                </div>
-                <div className="brainrot-plan">
-                  {generatedRender.plan.map((item) => (
-                    <div className="brainrot-plan__item" key={item}>
-                      {item}
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : null}
-          </article>
+                      {generatedRender ? (
+                        <>
+                          <div className="brainrot-action-row">
+                            <a
+                              className="btn btn--ghost"
+                              href={generatedRender.deliveryUrl}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              Open render
+                            </a>
+                            <a
+                              className="btn btn--ghost"
+                              href={generatedRender.audioAsset.secureUrl}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              Open voice track
+                            </a>
+                            {generatedRender.subtitleAsset ? (
+                              <a
+                                className="btn btn--ghost"
+                                href={generatedRender.subtitleAsset.secureUrl}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                Open captions
+                              </a>
+                            ) : null}
+                          </div>
+                          <div className="brainrot-plan">
+                            {generatedRender.plan.map((item) => (
+                              <div className="brainrot-plan__item" key={item}>
+                                {item}
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      ) : null}
+                    </article>
+                  ),
+                },
+                {
+                  id: 'inputs',
+                  label: 'Inputs',
+                  content: (
+                    <article className="brainrot-surface">
+                      <div className="brainrot-surface__header">
+                        <div>
+                          <span className="brainrot-surface__eyebrow">Inputs</span>
+                          <h2>Pipeline state</h2>
+                          <p>The current script, voice asset, and gameplay bed the graph will use.</p>
+                        </div>
+                      </div>
 
-          <article className="brainrot-surface">
-            <div className="brainrot-surface__header">
-              <div>
-                <span className="brainrot-surface__eyebrow">Inputs</span>
-                <h2>Pipeline state</h2>
-                <p>The current script, voice asset, and gameplay bed the graph will use.</p>
-              </div>
-            </div>
+                      <div className="brainrot-asset-stack">
+                        <div className="brainrot-asset-card">
+                          <span>Selected type</span>
+                          <strong>{selectedTypePreset.label}</strong>
+                          <p>
+                            {selectedTypePreset.description} Target length: {targetDurationSeconds}s.
+                          </p>
+                        </div>
 
-            <div className="brainrot-asset-stack">
-              <div className="brainrot-asset-card">
-                <span>Selected type</span>
-                <strong>{selectedTypePreset.label}</strong>
-                <p>
-                  {selectedTypePreset.description} Target length: {targetDurationSeconds}s.
-                </p>
-              </div>
+                        <div className="brainrot-asset-card">
+                          <span>Current script</span>
+                          <strong>{activeScript?.title ?? 'Waiting for Gemini'}</strong>
+                          <p>{(activeScript?.spokenScript || scriptDraft || 'No script yet.').slice(0, 220)}</p>
+                        </div>
 
-              <div className="brainrot-asset-card">
-                <span>Current script</span>
-                <strong>{activeScript?.title ?? 'Waiting for Gemini'}</strong>
-                <p>{(activeScript?.spokenScript || scriptDraft || 'No script yet.').slice(0, 220)}</p>
-              </div>
+                        <div className="brainrot-asset-card">
+                          <div className="brainrot-asset-card__thumb">
+                            {gameplayAsset ? (
+                              <video autoPlay loop muted playsInline src={gameplayPreviewUrl} />
+                            ) : (
+                              <div className="brainrot-empty-state">Gameplay not ready.</div>
+                            )}
+                          </div>
+                          <span>Gameplay bed</span>
+                          <strong>{gameplayAsset?.label ?? 'Waiting for gameplay prep'}</strong>
+                          <p>
+                            {isCustomRemoteGameplayPreset
+                              ? 'Using the attached remote gameplay feed.'
+                              : selectedGameplayPreset.source === 'remote'
+                                ? 'Using the built-in satisfying stock background.'
+                                : isGameplayFallback
+                                  ? 'Using fallback Cloudinary asset.'
+                                  : 'Using the local gameplay cache.'}
+                          </p>
+                        </div>
 
-              <div className="brainrot-asset-card">
-                <div className="brainrot-asset-card__thumb">
-                  {gameplayAsset ? (
-                    <video autoPlay loop muted playsInline src={gameplayPreviewUrl} />
-                  ) : (
-                    <div className="brainrot-empty-state">Gameplay not ready.</div>
-                  )}
-                </div>
-                <span>Gameplay bed</span>
-                <strong>{gameplayAsset?.label ?? 'Waiting for gameplay prep'}</strong>
-                <p>
-                  {isCustomRemoteGameplayPreset
-                    ? 'Using the attached remote gameplay feed.'
-                    : selectedGameplayPreset.source === 'remote'
-                      ? 'Using the built-in satisfying stock background.'
-                    : isGameplayFallback
-                      ? 'Using fallback Cloudinary asset.'
-                      : 'Using the local gameplay cache.'}
-                </p>
-              </div>
+                        <div className="brainrot-asset-card">
+                          <span>Voice asset</span>
+                          <strong>{activeVoiceAsset?.label ?? 'Waiting for AI voice'}</strong>
+                          <p>
+                            {activeVoiceAsset
+                              ? `${generatedRender?.voiceName ?? selectedVoice.name} • ${formatDuration(activeVoiceAsset.duration)}`
+                              : 'The synthesized voice track will appear here after the next run.'}
+                          </p>
+                          {activeVoiceAsset ? <audio controls preload="none" src={activeVoiceAsset.secureUrl} /> : null}
+                        </div>
 
-              <div className="brainrot-asset-card">
-                <span>Voice asset</span>
-                <strong>{activeVoiceAsset?.label ?? 'Waiting for AI voice'}</strong>
-                <p>
-                  {activeVoiceAsset
-                    ? `${generatedRender?.voiceName ?? selectedVoice.name} • ${formatDuration(activeVoiceAsset.duration)}`
-                    : 'The synthesized voice track will appear here after the next run.'}
-                </p>
-                {activeVoiceAsset ? <audio controls preload="none" src={activeVoiceAsset.secureUrl} /> : null}
-              </div>
-
-              <div className="brainrot-asset-card">
-                <span>Caption track</span>
-                <strong>{activeSubtitleAsset?.label ?? 'Waiting for timed captions'}</strong>
-                <p>
-                  {activeSubtitleAsset
-                    ? `${activeSubtitleAsset.cueCount} cues uploaded to Cloudinary for burn-in.`
-                    : 'The next run will generate a timed SRT from the Gemini script.'}
-                </p>
-              </div>
-            </div>
-          </article>
+                        <div className="brainrot-asset-card">
+                          <span>Caption track</span>
+                          <strong>{activeSubtitleAsset?.label ?? 'Waiting for timed captions'}</strong>
+                          <p>
+                            {activeSubtitleAsset
+                              ? `${activeSubtitleAsset.cueCount} cues uploaded to Cloudinary for burn-in.`
+                              : 'The next run will generate a timed SRT from the Gemini script.'}
+                          </p>
+                        </div>
+                      </div>
+                    </article>
+                  ),
+                },
+            ]}
+          />
         </aside>
       </section>
 
