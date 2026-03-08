@@ -3249,11 +3249,18 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
         if (action.type === 'set_variant_count') {
           const count = normalizeBatchVideoCount(Number(action.params?.count || 1));
+          const scriptVariationMode =
+            action.params?.scriptVariationMode === 'same-script' ||
+            action.params?.scriptVariationMode === 'different-scripts'
+              ? action.params.scriptVariationMode
+              : count > 1
+                ? 'different-scripts'
+                : nextBatchSettings.scriptVariationMode;
           nextBatchSettings = {
             ...nextBatchSettings,
             videoCount: count,
             partLabelsEnabled: count > 1,
-            scriptVariationMode: count > 1 ? 'different-scripts' : nextBatchSettings.scriptVariationMode,
+            scriptVariationMode,
           };
           return;
         }
@@ -3381,7 +3388,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
                 ...nextBatchSettings,
                 videoCount: normalizeBatchVideoCount(nextVariantGameplayPresetIds.length),
                 partLabelsEnabled: true,
-                scriptVariationMode: 'different-scripts',
+                scriptVariationMode:
+                  nextBatchSettings.scriptVariationMode === 'same-script'
+                    ? 'same-script'
+                    : 'different-scripts',
               };
             }
           }
