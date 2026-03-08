@@ -24,6 +24,15 @@ type ThemeMode = 'light' | 'dark';
 
 const THEME_STORAGE_KEY = 'shorty-theme-mode';
 
+function loadInitialAuthState() {
+  const savedSession = loadSession();
+
+  return {
+    session: savedSession,
+    isAuthReady: !hasSupabaseBrowserConfig || Boolean(savedSession),
+  };
+}
+
 function loadThemePreference(): ThemeMode {
   if (typeof window === 'undefined') {
     return 'light';
@@ -38,10 +47,9 @@ function loadThemePreference(): ThemeMode {
 }
 
 function App() {
-  const [session, setSession] = useState<ShortySession | null>(() =>
-    hasSupabaseBrowserConfig ? null : loadSession()
-  );
-  const [isAuthReady, setIsAuthReady] = useState<boolean>(() => !hasSupabaseBrowserConfig);
+  const [initialAuthState] = useState(loadInitialAuthState);
+  const [session, setSession] = useState<ShortySession | null>(initialAuthState.session);
+  const [isAuthReady, setIsAuthReady] = useState<boolean>(initialAuthState.isAuthReady);
   const [theme, setTheme] = useState<ThemeMode>(() => loadThemePreference());
 
   const handleAuth = (nextSession: ShortySession) => {
@@ -158,8 +166,14 @@ function App() {
         <Route path="/app" element={<DashboardPage session={session} onLogout={handleLogout} />} />
         <Route path="/feature1" element={<Feature1Page session={session} />} />
         <Route path="/feature2" element={<Feature2Page session={session} />} />
-        <Route path="/login" element={<AuthPage mode="login" onAuth={handleAuth} />} />
-        <Route path="/signup" element={<AuthPage mode="signup" onAuth={handleAuth} />} />
+        <Route
+          path="/login"
+          element={session ? <Navigate replace to="/app" /> : <AuthPage mode="login" onAuth={handleAuth} />}
+        />
+        <Route
+          path="/signup"
+          element={session ? <Navigate replace to="/app" /> : <AuthPage mode="signup" onAuth={handleAuth} />}
+        />
         <Route path="*" element={<Navigate replace to="/" />} />
       </Routes>
     </div>
