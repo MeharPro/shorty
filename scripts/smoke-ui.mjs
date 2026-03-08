@@ -8,7 +8,6 @@ import process from 'node:process';
 import { chromium } from 'playwright';
 import feature1AgentHandler from '../api/feature1-agent.js';
 import generateReelsHandler from '../api/generate-reels.js';
-import healthHandler from '../api/health.js';
 
 const port = Number(process.env.SMOKE_PORT || 4173);
 const apiPort = Number(process.env.SMOKE_API_PORT || 3000);
@@ -150,7 +149,6 @@ let browser;
 let apiServer;
 
 const routeHandlers = new Map([
-  ['/api/health', healthHandler],
   ['/api/generate-reels', generateReelsHandler],
   ['/api/feature1-agent', feature1AgentHandler],
 ]);
@@ -222,7 +220,6 @@ try {
   await startApiServer();
 
   await waitForEndpoint(baseUrl, 45000);
-  await waitForEndpoint(`${apiBaseUrl}/api/health`, 60000);
 
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } });
