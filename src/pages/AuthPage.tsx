@@ -1,12 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import boltLogo from '../assets/bolt-logo.png';
-import { createShortySession, type ShortySession } from '../lib/session';
 import {
-  hasSupabaseBrowserConfig,
-  signInWithEmail,
-  signUpWithEmail,
-} from '../lib/supabase';
+  signInWithUsername,
+  signUpWithUsername,
+} from '../lib/localAuth';
+import type { ShortySession } from '../lib/session';
 
 interface AuthPageProps {
   mode: 'login' | 'signup';
@@ -15,8 +14,8 @@ interface AuthPageProps {
 
 export function AuthPage({ mode, onAuth }: AuthPageProps) {
   const navigate = useNavigate();
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authMessage, setAuthMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -26,11 +25,11 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const trimmedEmail = email.trim();
+    const trimmedUsername = username.trim();
     const trimmedPassword = password.trim();
 
-    if (!trimmedEmail || !trimmedPassword) {
-      setAuthMessage('Email and password are required.');
+    if (!trimmedUsername || !trimmedPassword) {
+      setAuthMessage('Username and password are required.');
       return;
     }
 
@@ -38,18 +37,16 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
     setAuthMessage('');
 
     try {
-      if (hasSupabaseBrowserConfig) {
-        const result = isSignup
-          ? await signUpWithEmail(trimmedEmail, trimmedPassword)
-          : await signInWithEmail(trimmedEmail, trimmedPassword);
+      const result = isSignup
+        ? await signUpWithUsername(trimmedUsername, trimmedPassword, displayName)
+        : await signInWithUsername(trimmedUsername, trimmedPassword);
 
-        if (!result.ok) {
-          setAuthMessage(result.message);
-          return;
-        }
+      if (!result.ok) {
+        setAuthMessage(result.message);
+        return;
       }
 
-      onAuth(createShortySession(trimmedEmail, isSignup ? name : undefined));
+      onAuth(result.session);
       setPassword('');
       navigate('/app');
     } finally {
@@ -75,46 +72,54 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
         </h1>
         <p className="auth-card__subtitle">
           {isSignup
-            ? 'Start turning long videos into viral shorts'
-            : 'Sign in to access your workspace'}
+            ? 'Use a username and password to create a local Shorty workspace.'
+            : 'Sign in with your username to open your saved Shorty workspace.'}
         </p>
 
         <form className="auth-form" onSubmit={handleSubmit}>
           {isSignup ? (
             <label className="auth-field">
-              <span>Name</span>
+              <span>Display name</span>
               <input
-                placeholder="Your name"
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                data-testid="auth-display-name"
+                placeholder="Your workspace name"
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
               />
             </label>
           ) : null}
 
           <label className="auth-field">
-            <span>Email</span>
+            <span>Username</span>
             <input
-              placeholder="you@example.com"
+              autoCapitalize="none"
+              autoCorrect="off"
+              data-testid="auth-username"
+              placeholder="creator_name"
               required
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
             />
           </label>
 
           <label className="auth-field">
             <span>Password</span>
             <input
+              data-testid="auth-password"
               placeholder="Enter your password"
               required
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(event) => setPassword(event.target.value)}
             />
           </label>
 
-          <button className="auth-submit" disabled={isSubmitting} type="submit">
+          <button
+            className="auth-submit"
+            data-testid="auth-submit"
+            disabled={isSubmitting}
+            type="submit"
+          >
             {isSubmitting ? 'Working...' : isSignup ? 'Create account' : 'Sign in'}
           </button>
 

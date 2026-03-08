@@ -1,22 +1,28 @@
 export interface ShortySession {
   name: string;
-  email: string;
+  username: string;
+  userKey: string;
   userId?: string;
 }
 
 const SESSION_KEY = 'shorty.session';
 
+export function normalizeUsername(username: string): string {
+  return username.trim().toLowerCase();
+}
+
 export function createShortySession(
-  email: string,
+  username: string,
   preferredName?: string,
   userId?: string
 ): ShortySession {
-  const trimmedEmail = email.trim();
-  const fallbackName = trimmedEmail.split('@')[0] || 'Creator';
+  const trimmedUsername = username.trim();
+  const fallbackName = trimmedUsername || 'Creator';
 
   return {
     name: preferredName?.trim() || fallbackName,
-    email: trimmedEmail,
+    username: trimmedUsername,
+    userKey: normalizeUsername(trimmedUsername),
     userId: userId?.trim() || undefined,
   };
 }
@@ -32,7 +38,22 @@ export function loadSession(): ShortySession | null {
   }
 
   try {
-    return JSON.parse(raw) as ShortySession;
+    const parsed = JSON.parse(raw) as ShortySession & { email?: string };
+
+    if (typeof parsed.username === 'string' && typeof parsed.userKey === 'string') {
+      return parsed;
+    }
+
+    if (typeof parsed.username === 'string') {
+      return createShortySession(parsed.username, parsed.name, parsed.userId);
+    }
+
+    if (typeof parsed.email === 'string') {
+      return createShortySession(parsed.email, parsed.name, parsed.userId);
+    }
+
+    window.localStorage.removeItem(SESSION_KEY);
+    return null;
   } catch {
     window.localStorage.removeItem(SESSION_KEY);
     return null;

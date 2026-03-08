@@ -77,7 +77,8 @@ function createSegment(id, text, start, end) {
 
 const smokeSession = {
   name: 'Smoke Tester',
-  email: 'smoke@example.com',
+  username: 'smoke_tester',
+  userKey: 'smoke_tester',
   userId: 'smoke-user',
 };
 
@@ -229,9 +230,9 @@ try {
   await page.addInitScript(
     ({ session, upload, transcript }) => {
       window.localStorage.setItem('shorty.session', JSON.stringify(session));
-      window.localStorage.setItem('shorty:uploads:v1', JSON.stringify([upload]));
+      window.localStorage.setItem(`shorty:uploads:${session.userKey}:v1`, JSON.stringify([upload]));
       window.localStorage.setItem(
-        `shorty:transcript:${upload.publicId}`,
+        `shorty:transcript:${session.userKey}:${upload.publicId}`,
         JSON.stringify(transcript)
       );
     },

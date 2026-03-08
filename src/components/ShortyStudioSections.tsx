@@ -14,6 +14,8 @@ import type {
   ShortyStudioModel,
 } from '../shorty/ShortyStudioModel';
 
+const VIDEO_UPLOAD_FORMATS = ['mp4', 'mov', 'm4v', 'webm'];
+
 interface ShortyHeroProps {
   model: ShortyStudioModel;
   copiedToken: string | null;
@@ -149,7 +151,7 @@ function ShortyAssetCard({
           onUploadError={onUploadError}
           buttonText={uploadText}
           resourceType="video"
-          clientAllowedFormats={['mp4', 'mov', 'm4v', 'webm']}
+          clientAllowedFormats={VIDEO_UPLOAD_FORMATS}
         />
         <button
           className="shorty-button shorty-button--ghost"
