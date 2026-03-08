@@ -27,6 +27,7 @@ interface ShortyStudioControllerDeps {
   savedExports: SavedExport[];
   manifests: RenderManifest[];
   manifestJson: string;
+  workspaceKey: string;
   setDraft: Dispatch<SetStateAction<CreatorDraft>>;
   setSourceAsset: Dispatch<SetStateAction<MediaAsset>>;
   setGameplayAsset: Dispatch<SetStateAction<MediaAsset>>;
@@ -136,7 +137,7 @@ export class ShortyStudioController {
 
     const nextHistory = [entry, ...this.deps.savedExports].slice(0, 6);
     this.deps.setSavedExports(nextHistory);
-    saveExportHistory(nextHistory);
+    saveExportHistory(nextHistory, this.deps.workspaceKey);
     this.deps.setIsSaving(true);
 
     try {

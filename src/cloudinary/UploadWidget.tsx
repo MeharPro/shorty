@@ -166,11 +166,13 @@ export function UploadWidget({
       if (timeout) clearTimeout(timeout);
     };
   }, [
+    clientAllowedFormats,
     allowedFormatsKey,
     folder,
     missingPreset,
     multiple,
     resourceType,
+    sources,
     sourcesKey,
   ]);
 
