@@ -1,7 +1,7 @@
 import { Cloudinary } from '@cloudinary/url-gen';
 import { format, quality } from '@cloudinary/url-gen/actions/delivery';
 import { source } from '@cloudinary/url-gen/actions/overlay';
-import { fill, pad } from '@cloudinary/url-gen/actions/resize';
+import { fill, fillPad } from '@cloudinary/url-gen/actions/resize';
 import { trim } from '@cloudinary/url-gen/actions/videoEdit';
 import { autoGravity, compass } from '@cloudinary/url-gen/qualifiers/gravity';
 import { focusOn as autoFocusOn } from '@cloudinary/url-gen/qualifiers/autoFocus';
@@ -224,7 +224,7 @@ function buildRenderableClip({
     .videoEdit(trim().startOffset(startOffset).duration(duration))
     .resize(
       safeFaceFrame
-        ? pad().width(1080).height(1920).gravity(buildFocusGravity(editingOptions))
+        ? fillPad().width(1080).height(1920).gravity(buildFocusGravity(editingOptions))
         : fill().width(1080).height(1920).gravity(buildFocusGravity(editingOptions))
     );
 

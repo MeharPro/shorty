@@ -7,5 +7,7 @@ BACKUP_DIR="$ROOT_DIR/.codex-backups/20260307-youtube-theme"
 cp "$BACKUP_DIR/App.tsx.bak" "$ROOT_DIR/src/App.tsx"
 cp "$BACKUP_DIR/index.css.bak" "$ROOT_DIR/src/index.css"
 cp "$BACKUP_DIR/App.css.bak" "$ROOT_DIR/src/App.css"
+cp "$BACKUP_DIR/index.html.bak" "$ROOT_DIR/index.html"
+rm -f "$ROOT_DIR/public/favicon.png"
 
 printf 'Restored style files from %s\n' "$BACKUP_DIR"

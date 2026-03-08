@@ -310,6 +310,7 @@ export function FaceDetectVideo({
   });
   const [activeSourceIndex, setActiveSourceIndex] = useState(0);
   const rafRef = useRef<number>(0);
+  const loadTimeoutRef = useRef<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackTime, setPlaybackTime] = useState(0);
   const lastDetectionAtRef = useRef(0);
@@ -408,6 +409,41 @@ export function FaceDetectVideo({
   }, [activeCue, captionVariant]);
 
   useEffect(() => {
+    if (loadTimeoutRef.current) {
+      window.clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
+
+    if (activeSourceIndex !== 0 || sourceCandidates.length <= 1) {
+      return () => undefined;
+    }
+
+    loadTimeoutRef.current = window.setTimeout(() => {
+      const video = videoRef.current;
+      if (!video || video.readyState >= 1) {
+        return;
+      }
+
+      setVideoAspect(null);
+      setPlaybackTime(0);
+      setFaces([]);
+      setFocusFace(null);
+      focusFaceRef.current = null;
+      faceTracksRef.current.clear();
+      lastDetectionAtRef.current = 0;
+      lastPlaybackTimeRef.current = 0;
+      setActiveSourceIndex(1);
+    }, 4500);
+
+    return () => {
+      if (loadTimeoutRef.current) {
+        window.clearTimeout(loadTimeoutRef.current);
+        loadTimeoutRef.current = null;
+      }
+    };
+  }, [activeSourceIndex, sourceCandidates.length, activeSrc]);
+
+  useEffect(() => {
     if (!isPlaying) {
       return () => undefined;
     }
@@ -499,6 +535,11 @@ export function FaceDetectVideo({
   }, [cameraMotion, debugFaces, effectiveFaceFocusEnabled, focusStrategy, isPlaying]);
 
   const handleLoadedMetadata = () => {
+    if (loadTimeoutRef.current) {
+      window.clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
+
     const video = videoRef.current;
     if (video?.videoWidth && video.videoHeight) {
       setVideoAspect(video.videoWidth / video.videoHeight);
@@ -513,6 +554,10 @@ export function FaceDetectVideo({
     setIsPlaying(false);
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
+    }
+    if (loadTimeoutRef.current) {
+      window.clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
     }
     lastDetectionAtRef.current = 0;
     lastPlaybackTimeRef.current = 0;
@@ -529,6 +574,11 @@ export function FaceDetectVideo({
   };
 
   const handleError = () => {
+    if (loadTimeoutRef.current) {
+      window.clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
+
     if (activeSourceIndex >= sourceCandidates.length - 1) {
       handlePause();
       return;
