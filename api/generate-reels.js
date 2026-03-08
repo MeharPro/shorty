@@ -1,13 +1,10 @@
 import { Cloudinary } from '@cloudinary/url-gen';
 import { format, quality } from '@cloudinary/url-gen/actions/delivery';
-import { source } from '@cloudinary/url-gen/actions/overlay';
 import { crop, fill, scale } from '@cloudinary/url-gen/actions/resize';
 import { trim } from '@cloudinary/url-gen/actions/videoEdit';
-import { autoGravity, compass } from '@cloudinary/url-gen/qualifiers/gravity';
+import { autoGravity } from '@cloudinary/url-gen/qualifiers/gravity';
 import { focusOn as autoFocusOn } from '@cloudinary/url-gen/qualifiers/autoFocus';
-import { Position } from '@cloudinary/url-gen/qualifiers/position';
 import { auto as autoQuality } from '@cloudinary/url-gen/qualifiers/quality';
-import { text } from '@cloudinary/url-gen/qualifiers/source';
 import { solid } from '@cloudinary/url-gen/qualifiers/textStroke';
 import { TextStyle } from '@cloudinary/url-gen/qualifiers/textStyle';
 import { faces } from '@cloudinary/url-gen/qualifiers/focusOn';
@@ -19,7 +16,7 @@ const FEATURE1_CAPTION_STYLE = {
   backgroundColor: '#000000',
   backgroundVisible: false,
   fontFamily: 'Impact',
-  fontSize: 24,
+  fontSize: 22,
   fontWeight: 'bold',
   strokeColor: '#000000',
   strokeWidth: 3,
@@ -33,6 +30,8 @@ const RENDER_HEIGHT = 1920;
 const CAPTION_MAX_LINES = 1;
 const MIN_CROP_SEGMENT_DURATION = 0.18;
 const MAX_DYNAMIC_CROP_SEGMENTS = 12;
+const TEXT_OVERLAY_FONT_SCALE = 6;
+const TEXT_OVERLAY_STROKE_SCALE = 3;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -60,10 +59,15 @@ function normalizeColor(value) {
   return `rgb:${String(value || '#0f172a').trim().replace(/^#/, '')}`;
 }
 
+function formatOffset(value) {
+  const rounded = Math.round(Number(value || 0) * 1000) / 1000;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(3).replace(/\.?0+$/, '');
+}
+
 function buildTextStyle(captionStyle, { includeStroke = true } = {}) {
   const textStyle = new TextStyle(captionStyle.fontFamily, captionStyle.fontSize).fontWeight(
     captionStyle.fontWeight
-  );
+  ).textAlignment('center');
 
   if (includeStroke && captionStyle.strokeWidth > 0) {
     textStyle.stroke(solid(captionStyle.strokeWidth, normalizeColor(captionStyle.strokeColor)));
@@ -83,7 +87,7 @@ function resolveCaptionStyle(editingOptions = {}) {
 
   return {
     ...FEATURE1_CAPTION_STYLE,
-    fontSize: shakingCaptions ? 26 : FEATURE1_CAPTION_STYLE.fontSize,
+    fontSize: shakingCaptions ? 24 : FEATURE1_CAPTION_STYLE.fontSize,
     strokeWidth: shakingCaptions ? 4 : FEATURE1_CAPTION_STYLE.strokeWidth,
     maxWordsPerCue: 1,
     maxCharsPerLine: editingOptions.captionDensity === 'tight' ? 10 : 12,
@@ -136,24 +140,65 @@ function wrapCaptionWordsIntoLines(words, maxCharsPerLine, maxLines) {
   return rows.slice(0, maxLines);
 }
 
-function buildCaptionLayers(line, captionStyle, offsetY) {
-  const overlayText = sanitizeOverlayText(line) || 'Watch';
-  const textSource = text(overlayText, buildTextStyle(captionStyle)).textColor(
-    normalizeColor(captionStyle.textColor)
-  );
+function resolveTextOverlayFontSize(captionStyle) {
+  return clamp(Math.round(captionStyle.fontSize * TEXT_OVERLAY_FONT_SCALE), 160, 280);
+}
 
-  if (captionStyle.backgroundVisible) {
-    textSource.backgroundColor(normalizeColor(captionStyle.backgroundColor));
+function resolveTextOverlayStrokeWidth(captionStyle) {
+  if (captionStyle.strokeWidth <= 0) {
+    return 0;
   }
 
+  return clamp(Math.round(captionStyle.strokeWidth * TEXT_OVERLAY_STROKE_SCALE), 8, 18);
+}
+
+function buildTextOverlayStyle(captionStyle) {
   return [
-    source(textSource).position(
-      new Position()
-        .gravity(compass(captionStyle.placement))
-        .offsetX(captionStyle.horizontalOffset)
-        .offsetY(offsetY)
-    ),
+    captionStyle.fontFamily,
+    resolveTextOverlayFontSize(captionStyle),
+    captionStyle.fontWeight,
+    'center',
+    captionStyle.strokeWidth > 0 ? 'stroke' : null,
+  ].filter(Boolean).join('_');
+}
+
+function buildTextOverlayTransformation(
+  line,
+  captionStyle,
+  { offsetY = captionStyle.verticalOffset, startOffset = null, endOffset = null } = {}
+) {
+  const overlayText = encodeURIComponent(sanitizeOverlayText(line) || 'Watch');
+  const sourceParts = ['fl_text_no_trim'];
+  const strokeWidth = resolveTextOverlayStrokeWidth(captionStyle);
+
+  if (strokeWidth > 0) {
+    sourceParts.push(`bo_${strokeWidth}px_solid_${normalizeColor(captionStyle.strokeColor)}`);
+  }
+
+  sourceParts.push(`co_${normalizeColor(captionStyle.textColor)}`);
+
+  if (captionStyle.backgroundVisible) {
+    sourceParts.push(`b_${normalizeColor(captionStyle.backgroundColor)}`);
+  }
+
+  sourceParts.push(`l_text:${buildTextOverlayStyle(captionStyle)}:${overlayText}`);
+
+  const applyParts = [
+    'fl_layer_apply',
+    `g_${captionStyle.placement}`,
+    `x_${formatOffset(captionStyle.horizontalOffset)}`,
+    `y_${formatOffset(offsetY)}`,
   ];
+
+  if (Number.isFinite(startOffset)) {
+    applyParts.push(`so_${formatOffset(startOffset)}`);
+  }
+
+  if (Number.isFinite(endOffset)) {
+    applyParts.push(`eo_${formatOffset(endOffset)}`);
+  }
+
+  return `${sourceParts.join(',')}/${applyParts.join(',')}`;
 }
 
 function buildTimedSubtitlesTransformations(subtitleAsset, captionStyle) {
@@ -230,11 +275,6 @@ function createSourceVideo(cld, sourceDescriptor) {
   return sourceDescriptor.useFetch
     ? cld.video(sourceDescriptor.remoteUrl).setDeliveryType('fetch')
     : cld.video(sourceDescriptor.publicId);
-}
-
-function formatOffset(value) {
-  const rounded = Math.round(Number(value || 0) * 1000) / 1000;
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(3).replace(/\.?0+$/, '');
 }
 
 function cropWindowDifference(left, right) {
@@ -436,27 +476,18 @@ function resolveCropPixels(segment, sourceWidth, sourceHeight) {
   return { width, height, x, y };
 }
 
-function buildCropTransformation(cropPixels) {
-  return crop()
-    .width(cropPixels.width)
-    .height(cropPixels.height)
-    .x(cropPixels.x)
-    .y(cropPixels.y)
-    .toString();
-}
+function resolveClipCropWindow(clipCropSegments) {
+  if (!Array.isArray(clipCropSegments) || clipCropSegments.length === 0) {
+    return null;
+  }
 
-function buildScaleTransformation() {
-  return scale().width(RENDER_WIDTH).height(RENDER_HEIGHT).toString();
-}
+  return clipCropSegments.reduce((merged, segment) => {
+    if (!merged) {
+      return { ...segment };
+    }
 
-function buildSpliceLayerTransformation(sourcePublicId, cropPixels, startOffset, duration) {
-  return [
-    `l_video:${serializeOverlayPublicId(sourcePublicId)}`,
-    buildCropTransformation(cropPixels),
-    buildScaleTransformation(),
-    `fl_splice,so_${formatOffset(startOffset)},du_${formatOffset(duration)}`,
-    'fl_layer_apply',
-  ].join('/');
+    return mergeClipCropSegments(merged, segment);
+  }, null);
 }
 
 function buildBaseClipRender({
@@ -479,37 +510,21 @@ function buildBaseClipRender({
 
   if (canApplyDynamicCrop) {
     const clipCropSegments = selectClipCropSegments(cropWindows, startOffset, duration);
+    const clipCropWindow = resolveClipCropWindow(clipCropSegments);
 
-    if (clipCropSegments.length > 0) {
-      const [firstSegment, ...remainingSegments] = clipCropSegments;
-      const firstCropPixels = resolveCropPixels(firstSegment, sourceWidth, sourceHeight);
-      const render = createSourceVideo(cld, sourceDescriptor)
-        .videoEdit(
-          trim()
-            .startOffset(startOffset + firstSegment.start)
-            .duration(firstSegment.duration)
-        )
+    if (clipCropWindow) {
+      const cropPixels = resolveCropPixels(clipCropWindow, sourceWidth, sourceHeight);
+
+      return createSourceVideo(cld, sourceDescriptor)
+        .videoEdit(trim().startOffset(startOffset).duration(duration))
         .resize(
           crop()
-            .width(firstCropPixels.width)
-            .height(firstCropPixels.height)
-            .x(firstCropPixels.x)
-            .y(firstCropPixels.y)
+            .width(cropPixels.width)
+            .height(cropPixels.height)
+            .x(cropPixels.x)
+            .y(cropPixels.y)
         )
         .resize(scale().width(RENDER_WIDTH).height(RENDER_HEIGHT));
-
-      remainingSegments.forEach((segment) => {
-        render.addTransformation(
-          buildSpliceLayerTransformation(
-            sourceDescriptor.publicId,
-            resolveCropPixels(segment, sourceWidth, sourceHeight),
-            startOffset + segment.start,
-            segment.duration
-          )
-        );
-      });
-
-      return render;
     }
   }
 
@@ -549,15 +564,15 @@ function buildRenderableClip({
     });
   } else {
     const lines = splitFallbackCaptionLines(captionLines, fallbackText);
-    const lineOffset = Math.round(captionStyle.fontSize * 0.72);
+    const lineOffset = Math.round(resolveTextOverlayFontSize(captionStyle) * 0.72);
     const blockStartOffset =
       captionStyle.verticalOffset - ((lines.length - 1) * lineOffset) / 2;
 
     lines.forEach((line, index) => {
-      buildCaptionLayers(line, captionStyle, Math.round(blockStartOffset + index * lineOffset)).forEach(
-        (layer) => {
-          render.overlay(layer);
-        }
+      render.addTransformation(
+        buildTextOverlayTransformation(line, captionStyle, {
+          offsetY: Math.round(blockStartOffset + index * lineOffset),
+        })
       );
     });
   }

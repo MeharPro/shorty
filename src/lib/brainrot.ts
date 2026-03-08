@@ -643,7 +643,9 @@ function buildTextStyle(
   const textStyle = new TextStyle(
     captionStyle.fontFamily,
     options?.fontSize ?? captionStyle.fontSize
-  ).fontWeight(captionStyle.fontWeight);
+  )
+    .fontWeight(captionStyle.fontWeight)
+    .textAlignment('center');
 
   if (options?.includeStroke !== false && captionStyle.strokeWidth > 0) {
     textStyle.stroke(solid(captionStyle.strokeWidth, normalizeColor(captionStyle.strokeColor)));

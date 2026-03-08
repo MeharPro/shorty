@@ -2176,7 +2176,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                                 key={clip.deliveryUrl}
                                 wrapperClassName="reel-card-v2__render"
                                 className="reel-card-v2__video"
-                                autoPlay
+                                autoPlay={recommended || isTop}
                                 controls
                                 loop
                                 playsInline

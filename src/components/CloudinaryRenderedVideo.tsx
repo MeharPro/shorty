@@ -3,6 +3,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactEventHandler,
   type SyntheticEvent,
   type VideoHTMLAttributes,
 } from 'react';
@@ -25,6 +26,8 @@ function buildRetryUrl(src: string, retryCount: number): string {
   return `${src}${separator}retry=${retryCount}`;
 }
 
+const CLOUDINARY_RENDER_PLAY_EVENT = 'cloudinary-render-video:play';
+
 export function CloudinaryRenderedVideo({
   src,
   wrapperClassName = '',
@@ -34,8 +37,10 @@ export function CloudinaryRenderedVideo({
   retryDelayMs = 1200,
   onError,
   onLoadedData,
+  onPlay,
   ...videoProps
 }: CloudinaryRenderedVideoProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const retryTimeoutRef = useRef<number | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [isWaiting, setIsWaiting] = useState(false);
@@ -43,10 +48,25 @@ export function CloudinaryRenderedVideo({
   const resolvedSrc = useMemo(() => buildRetryUrl(src, retryCount), [retryCount, src]);
 
   useEffect(() => {
+    const handleExclusivePlay = (event: Event) => {
+      const currentVideo = videoRef.current;
+      const playingVideo = (event as CustomEvent<HTMLVideoElement | null>).detail;
+
+      if (!currentVideo || !playingVideo || currentVideo === playingVideo || currentVideo.paused) {
+        return;
+      }
+
+      currentVideo.pause();
+    };
+
+    window.addEventListener(CLOUDINARY_RENDER_PLAY_EVENT, handleExclusivePlay);
+
     return () => {
       if (retryTimeoutRef.current) {
         window.clearTimeout(retryTimeoutRef.current);
       }
+
+      window.removeEventListener(CLOUDINARY_RENDER_PLAY_EVENT, handleExclusivePlay);
     };
   }, []);
 
@@ -83,14 +103,25 @@ export function CloudinaryRenderedVideo({
     onLoadedData?.(event);
   };
 
+  const handlePlay: ReactEventHandler<HTMLVideoElement> = (event) => {
+    window.dispatchEvent(
+      new CustomEvent(CLOUDINARY_RENDER_PLAY_EVENT, {
+        detail: event.currentTarget,
+      })
+    );
+    onPlay?.(event);
+  };
+
   return (
     <div className={`cloudinary-render-video ${wrapperClassName}`.trim()}>
       <video
+        ref={videoRef}
         {...videoProps}
         className={className}
         src={resolvedSrc}
         onError={handleError}
         onLoadedData={handleLoadedData}
+        onPlay={handlePlay}
       />
       {isWaiting ? (
         <div className="cloudinary-render-video__status">{loadingLabel}</div>
