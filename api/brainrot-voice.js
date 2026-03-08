@@ -1,16 +1,8 @@
-import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
-import { promisify } from 'node:util';
 import {
   buildAudioAssetResponse,
-  createTemporaryMediaFile,
-  getMediaDurationSeconds,
-  removeTemporaryFile,
   slugify,
   uploadBufferToCloudinary,
 } from '../lib/brainrotPipeline.js';
-
-const runCommand = promisify(execFile);
 
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const GOOGLE_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -19,6 +11,8 @@ const DEFAULT_ELEVEN_VOICE_ID = '21m00Tcm4TlvDq8ikWAM';
 const DEFAULT_GOOGLE_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 const DEFAULT_GOOGLE_VOICE = 'Kore';
 const GOOGLE_PCM_SAMPLE_RATE = 24000;
+const PCM_BITS_PER_SAMPLE = 16;
+const PCM_CHANNELS = 1;
 
 function normalizeBody(body) {
   if (!body) {
@@ -140,6 +134,71 @@ function parseInlineAudioData(payload) {
   };
 }
 
+function parseInlineAudioSampleRate(mimeType) {
+  const normalizedMimeType = cleanText(mimeType).toLowerCase();
+  const match = normalizedMimeType.match(/(?:rate|samplerate)\s*=\s*(\d{4,6})/i);
+  const parsed = Number(match?.[1] || GOOGLE_PCM_SAMPLE_RATE);
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : GOOGLE_PCM_SAMPLE_RATE;
+}
+
+function buildWavBufferFromPcm(pcmBuffer, sampleRate) {
+  const byteRate = sampleRate * PCM_CHANNELS * (PCM_BITS_PER_SAMPLE / 8);
+  const blockAlign = PCM_CHANNELS * (PCM_BITS_PER_SAMPLE / 8);
+  const header = Buffer.alloc(44);
+
+  header.write('RIFF', 0, 'ascii');
+  header.writeUInt32LE(36 + pcmBuffer.length, 4);
+  header.write('WAVE', 8, 'ascii');
+  header.write('fmt ', 12, 'ascii');
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(PCM_CHANNELS, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(PCM_BITS_PER_SAMPLE, 34);
+  header.write('data', 36, 'ascii');
+  header.writeUInt32LE(pcmBuffer.length, 40);
+
+  return Buffer.concat([header, pcmBuffer]);
+}
+
+function normalizeGoogleInlineAudio(inlineAudio) {
+  const rawBuffer = Buffer.from(inlineAudio.data, 'base64');
+  const normalizedMimeType = cleanText(inlineAudio.mimeType).toLowerCase();
+
+  if (normalizedMimeType.includes('mpeg') || normalizedMimeType.includes('mp3')) {
+    return {
+      buffer: rawBuffer,
+      contentType: 'audio/mpeg',
+      fileExtension: 'mp3',
+      durationSeconds: null,
+    };
+  }
+
+  if (normalizedMimeType.includes('wav') || normalizedMimeType.includes('wave')) {
+    return {
+      buffer: rawBuffer,
+      contentType: 'audio/wav',
+      fileExtension: 'wav',
+      durationSeconds: null,
+    };
+  }
+
+  const sampleRate = parseInlineAudioSampleRate(inlineAudio.mimeType);
+  const durationSeconds = Number(
+    (rawBuffer.length / (PCM_CHANNELS * (PCM_BITS_PER_SAMPLE / 8) * sampleRate)).toFixed(2)
+  );
+
+  return {
+    buffer: buildWavBufferFromPcm(rawBuffer, sampleRate),
+    contentType: 'audio/wav',
+    fileExtension: 'wav',
+    durationSeconds,
+  };
+}
+
 function buildGoogleSpeechPrompt(text, voiceSettings) {
   const pace =
     voiceSettings.speed >= 1.05 ? 'fast' : voiceSettings.speed <= 0.88 ? 'measured' : 'natural';
@@ -160,86 +219,49 @@ function buildGoogleSpeechPrompt(text, voiceSettings) {
   ].join('\n');
 }
 
-async function transcodePcmToMp3(seed, pcmBuffer) {
-  let pcmPath = null;
-  let mp3Path = null;
-
-  try {
-    pcmPath = await createTemporaryMediaFile(seed, 'pcm', pcmBuffer);
-    mp3Path = pcmPath.replace(/\.pcm$/i, '.mp3');
-
-    await runCommand('ffmpeg', [
-      '-y',
-      '-f',
-      's16le',
-      '-ar',
-      `${GOOGLE_PCM_SAMPLE_RATE}`,
-      '-ac',
-      '1',
-      '-i',
-      pcmPath,
-      '-codec:a',
-      'libmp3lame',
-      '-q:a',
-      '2',
-      mp3Path,
-    ]);
-
-    return readFile(mp3Path);
-  } finally {
-    await removeTemporaryFile(pcmPath);
-    await removeTemporaryFile(mp3Path);
-  }
-}
-
 async function uploadVoiceAsset({
   cloudName,
   apiKey,
   apiSecret,
   audioBuffer,
+  contentType,
+  fileExtension,
   seed,
   provider,
   modelId,
   voiceId,
   alignment = null,
+  measuredDurationSeconds = null,
   fallbackDurationSeconds,
   warning,
 }) {
-  let temporaryFilePath = null;
+  const measuredDuration = measuredDurationSeconds || fallbackDurationSeconds || 0;
+  const publicId = `shorty/brainrot/audio/${slugify(seed) || 'voice'}-${Date.now()}`;
 
-  try {
-    temporaryFilePath = await createTemporaryMediaFile(seed, 'mp3', audioBuffer);
-    const measuredDuration =
-      (await getMediaDurationSeconds(temporaryFilePath)) || fallbackDurationSeconds || 0;
-    const publicId = `shorty/brainrot/audio/${slugify(seed) || 'voice'}-${Date.now()}`;
+  await uploadBufferToCloudinary({
+    cloudName,
+    apiKey,
+    apiSecret,
+    buffer: audioBuffer,
+    fileName: `${slugify(seed) || 'voice'}.${fileExtension}`,
+    contentType,
+    publicId,
+    resourceType: 'video',
+  });
 
-    await uploadBufferToCloudinary({
-      cloudName,
-      apiKey,
-      apiSecret,
-      buffer: audioBuffer,
-      fileName: `${slugify(seed) || 'voice'}.mp3`,
-      contentType: 'audio/mpeg',
-      publicId,
-      resourceType: 'video',
-    });
-
-    return {
-      audioAsset: {
-        ...buildAudioAssetResponse(cloudName, publicId, measuredDuration),
-        provider,
-      },
-      durationSeconds: measuredDuration,
+  return {
+    audioAsset: {
+      ...buildAudioAssetResponse(cloudName, publicId, measuredDuration),
       provider,
-      modelId,
-      voiceId,
-      alignment,
-      generatedAt: new Date().toISOString(),
-      warning,
-    };
-  } finally {
-    await removeTemporaryFile(temporaryFilePath);
-  }
+    },
+    durationSeconds: measuredDuration,
+    provider,
+    modelId,
+    voiceId,
+    alignment,
+    generatedAt: new Date().toISOString(),
+    warning,
+  };
 }
 
 async function synthesizeWithElevenLabs({
@@ -294,16 +316,22 @@ async function synthesizeWithElevenLabs({
 
   const alignment = payload.normalized_alignment || payload.alignment || null;
   const wordTimings = buildWordTimings(alignment);
+  const measuredDurationSeconds = wordTimings.length
+    ? Math.max(...wordTimings.map((word) => Number(word.endSeconds) || 0))
+    : null;
 
   return uploadVoiceAsset({
     cloudName,
     apiKey: cloudinaryApiKey,
     apiSecret: cloudinaryApiSecret,
     audioBuffer: Buffer.from(audioBase64, 'base64'),
+    contentType: 'audio/mpeg',
+    fileExtension: 'mp3',
     seed,
     provider: 'elevenlabs',
     modelId,
     voiceId,
+    measuredDurationSeconds,
     fallbackDurationSeconds: estimateDurationSeconds(text, voiceSettings.speed),
     alignment: wordTimings.length
       ? {
@@ -369,18 +397,20 @@ async function synthesizeWithGoogleAi({
     throw new Error('Google AI did not return audio for the voiceover.');
   }
 
-  const pcmBuffer = Buffer.from(inlineAudio.data, 'base64');
-  const audioBuffer = await transcodePcmToMp3(seed, pcmBuffer);
+  const uploadAudio = normalizeGoogleInlineAudio(inlineAudio);
 
   return uploadVoiceAsset({
     cloudName,
     apiKey: cloudinaryApiKey,
     apiSecret: cloudinaryApiSecret,
-    audioBuffer,
+    audioBuffer: uploadAudio.buffer,
+    contentType: uploadAudio.contentType,
+    fileExtension: uploadAudio.fileExtension,
     seed,
     provider: 'google-ai',
     modelId,
     voiceId: `google:${normalizeGoogleVoiceId(voiceId)}`,
+    measuredDurationSeconds: uploadAudio.durationSeconds,
     fallbackDurationSeconds: estimateDurationSeconds(text, voiceSettings.speed),
     alignment: null,
     warning,
