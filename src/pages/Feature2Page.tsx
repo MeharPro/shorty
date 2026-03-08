@@ -3597,6 +3597,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       setBatchSettings(nextBatchSettings);
       setVoiceFilterMode(nextVoiceFilterMode);
       setSelectedVoiceId(nextSelectedVoiceId);
+      setVariantVoiceIds(nextVariantVoiceIds);
       setSelectedGameplayPresetId(nextSelectedGameplayPresetId);
       setVariantGameplayPresetIds(nextVariantGameplayPresetIds);
       setGameplayStartOffset(nextGameplayStartOffset);
