@@ -7,7 +7,7 @@ function localApiPlugin(): PluginOption {
   return {
     name: 'shorty-local-api',
     configureServer(server: ViteDevServer) {
-      server.middlewares.use((
+      server.middlewares.use(async (
         req: Connect.IncomingMessage,
         res: ServerResponse<IncomingMessage>,
         next: Connect.NextFunction
@@ -17,7 +17,14 @@ function localApiPlugin(): PluginOption {
           return;
         }
 
-        void handleApiRequest(req, res).catch(next);
+        try {
+          const handled = await handleApiRequest(req, res, { send404: false });
+          if (!handled) {
+            next();
+          }
+        } catch (error) {
+          next(error);
+        }
       });
     },
   };
@@ -30,5 +37,13 @@ export default defineConfig({
     // Analytics: Mark this project as created via create-cloudinary-react CLI
     'process.env.CLOUDINARY_SOURCE': '"cli"',
     'process.env.CLD_CLI': '"true"',
+  },
+  server: {
+    proxy: {
+      '/api': {
+        target: `http://127.0.0.1:${process.env.VERCEL_PORT || 3000}`,
+        changeOrigin: true,
+      },
+    },
   },
 });

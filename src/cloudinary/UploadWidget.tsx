@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { cloudName, isDemoCloud, uploadPreset } from './config';
 
+const DEFAULT_SOURCES = ['local', 'camera', 'url'] as const;
+
 export interface CloudinaryUploadResult {
   asset_id?: string;
   public_id: string;
@@ -59,19 +61,28 @@ export function UploadWidget({
   className = '',
   resourceType = 'auto',
   clientAllowedFormats,
-  sources = ['local', 'camera', 'url'],
+  sources = DEFAULT_SOURCES as unknown as string[],
   folder = 'shorty',
   multiple = false,
 }: UploadWidgetProps) {
   const widgetRef = useRef<{ open: () => void } | null>(null);
+  const uploadSuccessRef = useRef(onUploadSuccess);
+  const uploadErrorRef = useRef(onUploadError);
   const [isReady, setIsReady] = useState(false);
   const [scriptError, setScriptError] = useState(false);
   const missingPreset = !uploadPreset;
+  const allowedFormatsKey = clientAllowedFormats?.join(',') ?? '';
+  const sourcesKey = sources.join(',');
   const blockedMessage = isDemoCloud
     ? `Uploads are disabled while VITE_CLOUDINARY_CLOUD_NAME is set to "demo". Switch it to your real Cloudinary cloud name to use the "${uploadPreset}" preset.`
     : missingPreset
       ? 'Add VITE_CLOUDINARY_UPLOAD_PRESET to enable uploads in the widget.'
       : '';
+
+  useEffect(() => {
+    uploadSuccessRef.current = onUploadSuccess;
+    uploadErrorRef.current = onUploadError;
+  }, [onUploadError, onUploadSuccess]);
 
   useEffect(() => {
     if (missingPreset || isDemoCloud) {
@@ -111,12 +122,12 @@ export function UploadWidget({
         },
         (error: CloudinaryWidgetError | null, result: CloudinaryWidgetResult | null) => {
           if (error) {
-            onUploadError?.(new Error(error.message || 'Upload failed'));
+            uploadErrorRef.current?.(new Error(error.message || 'Upload failed'));
             return;
           }
 
           if (result && result.event === 'success') {
-            onUploadSuccess?.(result.info);
+            uploadSuccessRef.current?.(result.info);
           }
         }
       );
@@ -156,13 +167,13 @@ export function UploadWidget({
     };
   }, [
     clientAllowedFormats,
+    allowedFormatsKey,
     folder,
     missingPreset,
     multiple,
-    onUploadError,
-    onUploadSuccess,
     resourceType,
     sources,
+    sourcesKey,
   ]);
 
   const handleClick = () => {

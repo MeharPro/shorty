@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import boltLogo from '../assets/bolt-logo.png';
-import { loadReelHistory } from '../lib/persistence';
+import { loadReelHistory, saveReelHistory } from '../lib/persistence';
 import {
   fetchReelHistory,
   hasSupabaseBrowserConfig,
@@ -23,17 +23,24 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
   const [history, setHistory] = useState<ReelHistoryEntry[]>([]);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session) {
+      return;
+    }
 
-    const localHistory = loadReelHistory(session.email);
+    const localHistory = loadReelHistory(session.userKey);
     setHistory(localHistory);
 
-    if (!hasSupabaseBrowserConfig || !session.userId) return;
+    if (!hasSupabaseBrowserConfig || !session.userId) {
+      return;
+    }
 
     void fetchReelHistory(session.userId).then((response) => {
-      if (response.ok) {
-        setHistory(response.entries);
+      if (!response.ok) {
+        return;
       }
+
+      setHistory(response.entries);
+      saveReelHistory(session.userKey, response.entries);
     });
   }, [session]);
 
@@ -52,9 +59,8 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
 
   return (
     <div className="dashboard">
-      {/* Header */}
       <header className="dashboard__header">
-        <Link className="dashboard__brand" to="/">
+        <Link className="dashboard__brand" to="/app">
           <span className="dashboard__brand-mark">
             <img alt="Shorty" src={boltLogo} />
           </span>
@@ -64,7 +70,7 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
         <div className="dashboard__user-area">
           <div className="dashboard__user-info">
             <strong>{session.name}</strong>
-            <span>{session.email}</span>
+            <span>@{session.username}</span>
           </div>
           <button
             className="dashboard__logout"
@@ -77,13 +83,11 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
         </div>
       </header>
 
-      {/* Hero */}
       <div className="dashboard__hero">
         <h1>What do you want to create?</h1>
         <p>Choose a workflow below to start turning content into viral short-form videos.</p>
       </div>
 
-      {/* Two Feature Cards */}
       <div className="feature-grid">
         <Link className="feature-card" to="/feature1">
           <span className="feature-card__arrow">→</span>
@@ -118,15 +122,15 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
         </Link>
       </div>
 
-      {/* Past Work */}
       {history.length > 0 && (
         <section className="past-work">
           <h2 className="past-work__title">Past Work</h2>
           <div className="past-work__list">
             {history.slice(0, 8).map((entry) => {
               const topClip =
-                entry.result.clips.find((c) => c.id === entry.recommendedClipId) ??
+                entry.result.clips.find((clip) => clip.id === entry.recommendedClipId) ??
                 entry.result.clips[0];
+
               return (
                 <div className="past-work__item" key={entry.id}>
                   <div className="past-work__item-info">
@@ -141,8 +145,8 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
                       <a
                         className="btn btn--ghost btn--sm"
                         href={topClip.deliveryUrl}
-                        target="_blank"
                         rel="noreferrer"
+                        target="_blank"
                       >
                         View top reel
                       </a>

@@ -28,6 +28,21 @@ if [ ! -d "node_modules" ]; then
   npm install
 fi
 
+# Free ports if already in use
+free_port() {
+  local port="$1"
+  local pid
+  pid=$(lsof -ti :"$port" 2>/dev/null || true)
+  if [ -n "$pid" ]; then
+    echo "🔌 Killing process(es) on port $port (PID: $pid)..."
+    echo "$pid" | xargs kill -9 2>/dev/null || true
+    sleep 1
+  fi
+}
+
+free_port "$VITE_PORT"
+free_port "$VERCEL_PORT"
+
 echo "🎨 Starting frontend (Vite) on http://${VITE_HOST}:${VITE_PORT}..."
 npm run dev -- --host "$VITE_HOST" --port "$VITE_PORT" --strictPort &
 VITE_PID=$!
