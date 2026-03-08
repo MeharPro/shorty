@@ -58,11 +58,15 @@ fi
 if [ "${VERCEL_SKIP_DEV:-0}" = "1" ]; then
   echo "⚙️  Skipping Vercel dev because VERCEL_SKIP_DEV=1."
 elif ! command -v vercel >/dev/null 2>&1; then
-  echo "⚙️  Skipping Vercel dev because the Vercel CLI is not installed."
-  echo "   Install it with: npm install -g vercel"
+  echo "⚙️  Vercel CLI not installed. Falling back to the local API server."
+  node scripts/api-dev-server.mjs &
+  VERCEL_PID=$!
+  VERCEL_ENABLED=1
 elif ! vercel whoami >/dev/null 2>&1; then
-  echo "⚙️  Skipping Vercel dev because Vercel is not authenticated."
-  echo "   Run: vercel login"
+  echo "⚙️  Vercel is not authenticated. Falling back to the local API server."
+  node scripts/api-dev-server.mjs &
+  VERCEL_PID=$!
+  VERCEL_ENABLED=1
 else
   echo "⚙️  Starting backend (Vercel Dev) on http://127.0.0.1:${VERCEL_PORT}..."
   vercel dev --listen "$VERCEL_PORT" --yes &

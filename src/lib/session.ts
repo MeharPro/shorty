@@ -1,3 +1,5 @@
+import type { User } from '@supabase/supabase-js';
+
 export interface ShortySession {
   name: string;
   username: string;
@@ -11,20 +13,70 @@ export function normalizeUsername(username: string): string {
   return username.trim().toLowerCase();
 }
 
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== 'string') {
+      continue;
+    }
+
+    const trimmedValue = value.trim();
+    if (trimmedValue) {
+      return trimmedValue;
+    }
+  }
+
+  return undefined;
+}
+
+function usernameFromEmail(email?: string | null): string | undefined {
+  const trimmedEmail = email?.trim().toLowerCase();
+  if (!trimmedEmail) {
+    return undefined;
+  }
+
+  const [localPart] = trimmedEmail.split('@');
+  return localPart || trimmedEmail;
+}
+
 export function createShortySession(
   username: string,
   preferredName?: string,
-  userId?: string
+  userId?: string,
+  userKeyOverride?: string
 ): ShortySession {
   const trimmedUsername = username.trim();
   const fallbackName = trimmedUsername || 'Creator';
+  const userKeySource = userKeyOverride?.trim() || trimmedUsername;
 
   return {
     name: preferredName?.trim() || fallbackName,
     username: trimmedUsername,
-    userKey: normalizeUsername(trimmedUsername),
+    userKey: normalizeUsername(userKeySource),
     userId: userId?.trim() || undefined,
   };
+}
+
+export function createShortySessionFromAuthUser(
+  user: Pick<User, 'id' | 'email' | 'user_metadata'>
+): ShortySession {
+  const metadata =
+    user.user_metadata && typeof user.user_metadata === 'object'
+      ? (user.user_metadata as Record<string, unknown>)
+      : {};
+  const email = user.email?.trim().toLowerCase();
+  const username =
+    firstNonEmptyString(metadata.username, usernameFromEmail(email), user.id.slice(0, 8)) ||
+    'creator';
+  const displayName =
+    firstNonEmptyString(
+      metadata.display_name,
+      metadata.name,
+      metadata.full_name,
+      usernameFromEmail(email),
+      username
+    ) || 'Creator';
+
+  return createShortySession(username, displayName, user.id, email || user.id);
 }
 
 export function loadSession(): ShortySession | null {

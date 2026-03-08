@@ -4,7 +4,8 @@ Shorty turns long videos into short-form content.
 
 Current product scope:
 - Feature 1: turn existing videos into ranked reels
-- Feature 2: brain rot AI reels (planned / partial)
+- Feature 2: brain rot AI reels
+- Shared agent layer: Gemini-planned workflow mutations on both feature canvases
 - Base requirements: login, past work, upload, download
 
 ## Current status
@@ -21,7 +22,8 @@ What works now:
 - Reel ranking with virality scoring
 - Past work history stored locally and optionally synced to Supabase
 - Download links for generated reels
-- Feature 2 route and product placeholder
+- Feature 2 prompt -> script -> voice -> gameplay -> caption -> render flow
+- Right-sidebar workflow agent on Feature 1 and Feature 2
 
 Validation status:
 - `npm run lint` passes
@@ -63,14 +65,29 @@ Outputs:
 ### Feature 2
 Route: [src/pages/Feature2Page.tsx](src/pages/Feature2Page.tsx)
 
-Planned scope:
-- Minecraft gameplay base
-- topic selection
-- ElevenLabs voice selection
-- 10–50 generated outputs
-- ranking by brain rot score
+Current scope:
+- freeform execution canvas with editable core and custom nodes
+- Gemini prompt/script generation
+- AI voice selection
+- gameplay bed selection and timed captions
+- final Cloudinary output preview
+- shared sidebar agent layer that can mutate the graph and auto-run the existing pipeline
 
-This is not fully implemented yet.
+## Workflow agent
+
+Both feature pages now expose a shared right-sidebar agent layer.
+
+Architecture:
+- frontend adapters translate each page’s existing graph state into a shared workflow graph
+- `POST /api/agent-command` runs retrieval, Gemini planning, validation, candidate scoring, and bounded selection
+- validated graph actions compile back into each page’s existing local state
+- auto-run uses the same existing handlers already used by the manual UI
+
+Reliability rules:
+- the manual UI remains the source of truth
+- invalid planner output falls back to deterministic parsing
+- missing Supabase memory falls back to stateless planning
+- agent failures do not block manual transcribe / generate / run actions
 
 ## Tech stack
 
@@ -169,8 +186,22 @@ Required for real login / saved-user history:
 Optional server-side Supabase config:
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `AGENT_MEMORY_TABLE`
 
 If browser auth works already, these can stay as-is.
+
+#### Gemini workflow agent
+Required for the new shared agent layer:
+- `GEMINI_API_KEY`
+
+Optional overrides:
+- `GEMINI_AGENT_MODEL` defaults to `gemini-3.1-flash-lite`
+- `GEMINI_EMBEDDING_MODEL` defaults to `gemini-embedding-001`
+- `VITE_ENABLE_WORKFLOW_AGENT` defaults to enabled unless set to `false`
+
+Notes:
+- the agent layer is implemented without local models
+- Supabase-backed memory is optional; the agent still works statelessly when memory tables are unavailable
 
 #### Transcription
 Optional, but needed for auto-transcription:
@@ -217,9 +248,15 @@ That file includes the reel history table and policies used by the app.
 
 Current API routes:
 - [api/health.js](api/health.js)
-- [api/render-manifest.js](api/render-manifest.js)
-- [api/resolve-gameplay.js](api/resolve-gameplay.js)
-- [api/sign-cloudinary.js](api/sign-cloudinary.js)
+- [api/agent-command.js](api/agent-command.js)
+- [api/brainrot-ai.js](api/brainrot-ai.js)
+- [api/brainrot-captions.js](api/brainrot-captions.js)
+- [api/brainrot-intro-card.js](api/brainrot-intro-card.js)
+- [api/brainrot-script.js](api/brainrot-script.js)
+- [api/brainrot-voice.js](api/brainrot-voice.js)
+- [api/brainrot-voices.js](api/brainrot-voices.js)
+- [api/feature1-agent.js](api/feature1-agent.js)
+- [api/gameplay.js](api/gameplay.js)
 - [api/generate-reels.js](api/generate-reels.js)
 - [api/transcribe-video.js](api/transcribe-video.js)
 

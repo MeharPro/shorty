@@ -270,7 +270,7 @@ try {
 
   await page.waitForFunction(() => {
     const banner = document.querySelector('[data-testid="feature1-status-banner"]');
-    return Boolean(banner?.textContent?.includes('Local agent updated Feature 1'));
+    return Boolean(banner?.textContent?.includes('Workflow agent updated Feature 1'));
   }, undefined, { timeout: 120000 });
 
   await page.getByTestId('feature1-generate').click();

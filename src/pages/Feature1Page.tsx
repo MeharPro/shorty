@@ -19,7 +19,6 @@ import {
   type UploadHistoryItem,
 } from '../lib/persistence';
 import { buildCaptionCues } from '../lib/captions';
-import { planFeature1Pipeline } from '../lib/feature1Agent';
 import { generateReels } from '../lib/reels';
 import { auditGeneratedClips, chooseRecommendedClip } from '../lib/reelQualityAudit';
 import { analyzeVideoExpressions } from '../lib/visualAnalysis';
@@ -28,12 +27,17 @@ import {
   hasSupabaseBrowserConfig,
   persistReelHistoryEntry,
 } from '../lib/supabase';
+import { AgentChatPanel } from '../components/agent/AgentChatPanel';
+import { WorkflowSidebarTabs } from '../components/agent/WorkflowSidebarTabs';
 import { FaceDetectVideo } from '../components/FaceDetectVideo';
+import { buildFeature1WorkflowGraph } from '../lib/agent/feature1Adapter';
+import { downloadJsonFile } from '../lib/agent/export';
+import type { AgentCommandResponse, CustomBlockDefinition } from '../lib/agent/types';
+import { useWorkflowAgent } from '../lib/agent/useWorkflowAgent';
 import { transcribeVideo } from '../lib/transcription';
 import type { ShortySession } from '../lib/session';
 import type {
   MediaAsset,
-  Feature1AgentPlan,
   Feature1EditingAdvice,
   ReelGenerationResponse,
   ReelHistoryEntry,
@@ -104,6 +108,7 @@ interface LogicBlock extends LogicBlockTemplate {
   x: number;
   y: number;
   note: string;
+  agentBlock?: CustomBlockDefinition | null;
 }
 
 interface ConnectorPath {
@@ -117,6 +122,7 @@ const CORE_NODE_WIDTH = 220;
 const CORE_NODE_HEIGHT = 116;
 const LOGIC_NODE_WIDTH = 220;
 const DEFAULT_VIEWPORT_OFFSET = { x: 120, y: 120 };
+const WORKFLOW_AGENT_ENABLED = import.meta.env.VITE_ENABLE_WORKFLOW_AGENT !== 'false';
 
 const CORE_SEQUENCE: CoreNodeId[] = ['upload', 'transcribe', 'generate', 'hook-filter', 'results'];
 
@@ -130,6 +136,22 @@ const GENERATE_STAGES = [
 ];
 
 const FEATURE1_VIDEO_UPLOAD_FORMATS = ['mp4', 'mov', 'm4v', 'webm'];
+
+function collectUniqueUrls(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+
+  for (const value of values) {
+    if (!value || seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    urls.push(value);
+  }
+
+  return urls;
+}
 
 const INITIAL_CORE_NODES: CoreFlowNode[] = [
   { id: 'upload', label: 'Upload', icon: '📤', description: 'Add source video', x: 80, y: 120 },
@@ -214,19 +236,6 @@ const AGENT_BLOCK_ATTACHMENTS: Record<LogicBlockType, CoreNodeId> = {
   'export-split': 'results',
 };
 
-const AGENT_WISH_DEFAULT =
-  'Keep the active speaker face fully visible, tighten captions so they never overflow, and favor viral hooks with controlled motion.';
-const AGENT_CANVAS_SUMMARY_DEFAULT =
-  'Agent changes can add or update flow blocks, then focus the edited stage in the canvas.';
-
-interface AgentFlowchartUpdate {
-  blocks: LogicBlock[];
-  touchedBlockIds: string[];
-  focusedStage: CoreNodeId | null;
-  addedCount: number;
-  updatedCount: number;
-}
-
 function getAgentBlockCoordinates(blocks: LogicBlock[], attachTo: CoreNodeId, excludeId?: string) {
   const siblings = blocks.filter(
     (block) => block.attachTo === attachTo && (!excludeId || block.id !== excludeId)
@@ -238,64 +247,51 @@ function getAgentBlockCoordinates(blocks: LogicBlock[], attachTo: CoreNodeId, ex
   };
 }
 
-function applyAgentLogicBlocks(current: LogicBlock[], requestedTypes: string[]): AgentFlowchartUpdate {
-  const next = [...current];
-  const touchedBlockIds: string[] = [];
-  let focusedStage: CoreNodeId | null = null;
-  let addedCount = 0;
-  let updatedCount = 0;
+function isCoreNodeId(value: string): value is CoreNodeId {
+  return CORE_SEQUENCE.includes(value as CoreNodeId);
+}
 
-  for (const rawType of requestedTypes) {
-    const type = rawType as LogicBlockType;
-    const template = LOGIC_BLOCK_LIBRARY.find((item) => item.type === type);
-    if (!template) {
-      continue;
-    }
-
-    const attachTo = AGENT_BLOCK_ATTACHMENTS[type];
-    const existingIndex = next.findIndex((block) => block.type === type);
-    focusedStage = attachTo;
-
-    if (existingIndex >= 0) {
-      const existing = next[existingIndex];
-      const nextPosition =
-        existing.attachTo === attachTo
-          ? { x: existing.x, y: existing.y }
-          : getAgentBlockCoordinates(next, attachTo, existing.id);
-
-      next[existingIndex] = {
-        ...existing,
-        ...template,
-        attachTo,
-        x: nextPosition.x,
-        y: nextPosition.y,
-        note: 'Updated by the local pipeline agent from your latest prompt.',
-      };
-      touchedBlockIds.push(existing.id);
-      updatedCount += 1;
-      continue;
-    }
-
-    const position = getAgentBlockCoordinates(next, attachTo);
-    const id = `logic-${type}-${crypto.randomUUID()}`;
-    next.push({
-      ...template,
-      id,
-      attachTo,
-      x: position.x,
-      y: position.y,
-      note: 'Added by the local pipeline agent.',
-    });
-    touchedBlockIds.push(id);
-    addedCount += 1;
+function pickFeature1LogicTemplate(block: CustomBlockDefinition): LogicBlockTemplate {
+  const kind = `${block.blockKind} ${block.blockName}`.toLowerCase();
+  if (kind.includes('caption')) {
+    return LOGIC_BLOCK_LIBRARY.find((item) => item.type === 'caption-pass') ?? LOGIC_BLOCK_LIBRARY[1];
   }
+  if (kind.includes('voice')) {
+    return LOGIC_BLOCK_LIBRARY.find((item) => item.type === 'voiceover') ?? LOGIC_BLOCK_LIBRARY[3];
+  }
+  if (kind.includes('safety')) {
+    return LOGIC_BLOCK_LIBRARY.find((item) => item.type === 'brand-safety') ?? LOGIC_BLOCK_LIBRARY[4];
+  }
+  if (kind.includes('export') || kind.includes('variant')) {
+    return LOGIC_BLOCK_LIBRARY.find((item) => item.type === 'export-split') ?? LOGIC_BLOCK_LIBRARY[5];
+  }
+  if (kind.includes('retention') || kind.includes('viral')) {
+    return LOGIC_BLOCK_LIBRARY.find((item) => item.type === 'viral-score') ?? LOGIC_BLOCK_LIBRARY[2];
+  }
+  return LOGIC_BLOCK_LIBRARY.find((item) => item.type === 'hook-filter') ?? LOGIC_BLOCK_LIBRARY[0];
+}
+
+function createFeature1AgentLogicBlock(
+  block: CustomBlockDefinition,
+  currentBlocks: LogicBlock[]
+): LogicBlock {
+  const template = pickFeature1LogicTemplate(block);
+  const preferredAttachment = block.provenance.backingCoreNodes.find((nodeId) =>
+    isCoreNodeId(nodeId)
+  );
+  const attachTo = preferredAttachment ? preferredAttachment : AGENT_BLOCK_ATTACHMENTS[template.type];
+  const position = getAgentBlockCoordinates(currentBlocks, attachTo);
 
   return {
-    blocks: next,
-    touchedBlockIds,
-    focusedStage,
-    addedCount,
-    updatedCount,
+    ...template,
+    id: `logic-${template.type}-${crypto.randomUUID()}`,
+    label: block.blockName,
+    description: block.description,
+    attachTo,
+    x: position.x,
+    y: position.y,
+    note: block.internalPlan.join(' '),
+    agentBlock: block,
   };
 }
 
@@ -347,15 +343,24 @@ export function Feature1Page({ session }: Feature1PageProps) {
   const [editShakingCaptions, setEditShakingCaptions] = useState(true);
   const [editFaceFocus, setEditFaceFocus] = useState(true);
   const [editSafeFaceFrame, setEditSafeFaceFrame] = useState(true);
-  const [agentWish, setAgentWish] = useState(AGENT_WISH_DEFAULT);
-  const [agentPlan, setAgentPlan] = useState<Feature1AgentPlan | null>(null);
-  const [isApplyingAgent, setIsApplyingAgent] = useState(false);
-  const [agentCanvasSummary, setAgentCanvasSummary] = useState(AGENT_CANVAS_SUMMARY_DEFAULT);
+  const [agentFocusPreference, setAgentFocusPreference] =
+    useState<Feature1EditingAdvice['focusPreference']>('auto');
+  const [agentCameraMotionPreference, setAgentCameraMotionPreference] =
+    useState<Feature1EditingAdvice['cameraMotionPreference']>('auto');
+  const [agentCaptionDensity, setAgentCaptionDensity] =
+    useState<Feature1EditingAdvice['captionDensity']>('balanced');
+  const [agentViralStyle, setAgentViralStyle] =
+    useState<Feature1EditingAdvice['viralStyle']>('balanced');
+  const [agentVariantCount, setAgentVariantCount] = useState(1);
+  const [pendingAgentExecution, setPendingAgentExecution] = useState<{
+    shouldTranscribe: boolean;
+    shouldRun: boolean;
+    notes: string[];
+  } | null>(null);
 
   const [history, setHistory] = useState<ReelHistoryEntry[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
-  const agentCaptionDensity = agentPlan?.editingOptions.captionDensity ?? 'balanced';
 
   const sourcePreviewUrl = sourceAsset ? buildPlayableSourceUrl(sourceAsset) : null;
   const hasSource = !!sourceAsset;
@@ -505,15 +510,15 @@ export function Feature1Page({ session }: Feature1PageProps) {
         buildCaptionCues(transcriptionDetails.segments ?? [], {
           clipStart: clip.startOffset,
           clipDuration: clip.duration,
-          maxWordsPerCue: agentCaptionDensity === 'tight' ? 2 : editShakingCaptions ? 2 : 4,
-          maxCharsPerCue: agentCaptionDensity === 'tight' ? 12 : editShakingCaptions ? 14 : 24,
-          maxCueDuration: agentCaptionDensity === 'tight' ? 1.4 : editShakingCaptions ? 1.6 : 2.5,
-          maxLineChars: agentCaptionDensity === 'tight' ? 9 : editShakingCaptions ? 10 : 16,
+          maxWordsPerCue: agentCaptionDensity === 'tight' ? 2 : 3,
+          maxCharsPerCue: agentCaptionDensity === 'tight' ? 12 : 18,
+          maxCueDuration: agentCaptionDensity === 'tight' ? 1.2 : 1.8,
+          maxLineChars: agentCaptionDensity === 'tight' ? 10 : 14,
           maxLinesPerCue: 2,
         }),
       ])
     );
-  }, [agentCaptionDensity, editShakingCaptions, result, transcriptionDetails]);
+  }, [agentCaptionDensity, result, transcriptionDetails]);
 
   const startPan = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -709,77 +714,15 @@ export function Feature1Page({ session }: Feature1PageProps) {
   };
 
   const currentEditingOptions: Feature1EditingAdvice = {
-    ...(agentPlan?.editingOptions ?? {}),
     removeSilences: editRemoveSilences,
     shakingCaptions: editShakingCaptions,
     faceFocus: editFaceFocus,
     safeFaceFrame: editSafeFaceFrame,
+    focusPreference: agentFocusPreference,
+    cameraMotionPreference: agentCameraMotionPreference,
+    captionDensity: agentCaptionDensity,
+    viralStyle: agentViralStyle,
     qaEnabled: true,
-  };
-
-  const handleApplyAgent = async () => {
-    setIsApplyingAgent(true);
-    setErrorMessage('');
-
-    try {
-      const plan = await planFeature1Pipeline({
-        wish: agentWish,
-        transcriptPreview: transcriptText.trim().slice(0, 1200),
-        currentEditingOptions,
-        activeLogicBlocks: logicBlocks.map((block) => block.type),
-      });
-
-      setAgentPlan(plan);
-      if (typeof plan.editingOptions.removeSilences === 'boolean') {
-        setEditRemoveSilences(plan.editingOptions.removeSilences);
-      }
-      if (typeof plan.editingOptions.shakingCaptions === 'boolean') {
-        setEditShakingCaptions(plan.editingOptions.shakingCaptions);
-      }
-      if (typeof plan.editingOptions.faceFocus === 'boolean') {
-        setEditFaceFocus(plan.editingOptions.faceFocus);
-      }
-      if (typeof plan.editingOptions.safeFaceFrame === 'boolean') {
-        setEditSafeFaceFrame(plan.editingOptions.safeFaceFrame);
-      }
-
-      const flowchartUpdate = applyAgentLogicBlocks(logicBlocks, plan.logicBlocks);
-      setLogicBlocks(flowchartUpdate.blocks);
-      if (flowchartUpdate.touchedBlockIds.length > 0) {
-        setSelectedLogicBlockId(flowchartUpdate.touchedBlockIds[flowchartUpdate.touchedBlockIds.length - 1]);
-      }
-      if (flowchartUpdate.focusedStage) {
-        setActiveCoreNode(
-          flowchartUpdate.focusedStage === 'results' && !result ? 'generate' : flowchartUpdate.focusedStage
-        );
-      }
-
-      if (flowchartUpdate.addedCount || flowchartUpdate.updatedCount) {
-        const summaryParts = [];
-        if (flowchartUpdate.addedCount) {
-          summaryParts.push(`${flowchartUpdate.addedCount} added`);
-        }
-        if (flowchartUpdate.updatedCount) {
-          summaryParts.push(`${flowchartUpdate.updatedCount} updated`);
-        }
-        const totalFlowchartChanges = flowchartUpdate.addedCount + flowchartUpdate.updatedCount;
-        setAgentCanvasSummary(
-          `Flowchart edited: ${summaryParts.join(', ')} block${totalFlowchartChanges === 1 ? '' : 's'}.`
-        );
-      } else {
-        setAgentCanvasSummary('Agent updated reel settings without changing any flow blocks.');
-      }
-
-      setStatusMessage(
-        flowchartUpdate.addedCount || flowchartUpdate.updatedCount
-          ? `Local agent updated Feature 1 using ${plan.model} and edited the flowchart.`
-          : `Local agent updated Feature 1 using ${plan.model}.`
-      );
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to apply local AI changes.');
-    } finally {
-      setIsApplyingAgent(false);
-    }
   };
 
   const handleGenerate = async () => {
@@ -825,6 +768,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
         sourceAsset,
         googleDriveUrl: '',
         transcriptText: transcriptText.trim(),
+        transcriptSegments: transcriptionDetails?.segments,
         visualAnalysis: resolvedVisualAnalysis,
         editingOptions: currentEditingOptions,
       });
@@ -884,6 +828,273 @@ export function Feature1Page({ session }: Feature1PageProps) {
     });
   };
 
+  const buildCurrentWorkflowGraph = useCallback(
+    () =>
+      buildFeature1WorkflowGraph({
+        activeCoreNode,
+        selectedNodeId: selectedLogicBlockId ?? activeCoreNode,
+        coreNodes,
+        logicBlocks,
+        editingOptions: currentEditingOptions,
+        hasSource,
+        hasTranscript: Boolean(transcriptText.trim()),
+        hasResult: Boolean(result),
+        clipCount: result?.clips.length ?? 0,
+        recommendedClipId: result?.recommendedClipId ?? null,
+      }),
+    [
+      activeCoreNode,
+      coreNodes,
+      currentEditingOptions,
+      hasSource,
+      logicBlocks,
+      result,
+      selectedLogicBlockId,
+      transcriptText,
+    ]
+  );
+
+  const applyFeature1AgentResponse = useCallback(
+    async (response: AgentCommandResponse) => {
+      if (!response.validation.ok) {
+        throw new Error(response.validation.issues.join(' ') || 'Agent plan failed validation.');
+      }
+
+      const coreNodeIds = new Set(coreNodes.map((node) => node.id));
+      const customNodeIds = new Set(logicBlocks.map((block) => block.id));
+      const validationIssues: string[] = [];
+
+      response.actions.forEach((action) => {
+        if (action.type === 'set_active_stage' || action.type === 'update_node_params') {
+          if (action.targetNodeId && !coreNodeIds.has(action.targetNodeId as CoreNodeId)) {
+            validationIssues.push(`Unknown stage target: ${action.targetNodeId}`);
+          }
+        }
+
+        if ((action.type === 'remove_custom_block' || action.type === 'update_custom_block') && action.targetNodeId) {
+          if (!customNodeIds.has(action.targetNodeId)) {
+            validationIssues.push(`Unknown custom block target: ${action.targetNodeId}`);
+          }
+        }
+
+        if (action.type === 'create_custom_block' && !action.customBlock) {
+          validationIssues.push('Planner requested a custom block without a definition.');
+        }
+      });
+
+      if (validationIssues.length > 0) {
+        throw new Error(validationIssues.join(' '));
+      }
+
+      let nextActiveCoreNode = activeCoreNode;
+      let nextSelectedLogicBlockId = selectedLogicBlockId;
+      let nextLogicBlocks = [...logicBlocks];
+      let nextRemoveSilences = editRemoveSilences;
+      let nextShakingCaptions = editShakingCaptions;
+      let nextFaceFocus = editFaceFocus;
+      let nextSafeFaceFrame = editSafeFaceFrame;
+      let nextFocusPreference = agentFocusPreference;
+      let nextCameraMotionPreference = agentCameraMotionPreference;
+      let nextCaptionDensity = agentCaptionDensity;
+      let nextViralStyle = agentViralStyle;
+      let nextVariantCount = agentVariantCount;
+      let nextTranscriptionPublicId = transcriptionPublicId.trim();
+      let shouldTranscribe = response.execution.shouldTranscribe;
+      let shouldRun = response.execution.shouldRun;
+
+      response.actions.forEach((action) => {
+        if (action.type === 'set_active_stage' && isCoreNodeId(action.targetNodeId || '')) {
+          nextActiveCoreNode = action.targetNodeId as CoreNodeId;
+          return;
+        }
+
+        if (action.type === 'set_variant_count') {
+          nextVariantCount = Math.min(4, Math.max(1, Number(action.params?.count || 1)));
+          return;
+        }
+
+        if (action.type === 'queue_transcription') {
+          shouldTranscribe = true;
+          return;
+        }
+
+        if (action.type === 'queue_execution') {
+          shouldRun = true;
+          return;
+        }
+
+        if (action.type === 'create_custom_block' && action.customBlock) {
+          const nextBlock = createFeature1AgentLogicBlock(action.customBlock, nextLogicBlocks);
+          nextLogicBlocks = [...nextLogicBlocks, nextBlock];
+          nextSelectedLogicBlockId = nextBlock.id;
+          nextActiveCoreNode =
+            nextBlock.attachTo === 'results' && !result ? 'generate' : nextBlock.attachTo;
+          return;
+        }
+
+        if (action.type === 'update_custom_block' && action.targetNodeId) {
+          nextLogicBlocks = nextLogicBlocks.map((block) =>
+            block.id === action.targetNodeId
+              ? {
+                  ...block,
+                  label: typeof action.params?.label === 'string' ? action.params.label : block.label,
+                  description:
+                    typeof action.params?.description === 'string'
+                      ? action.params.description
+                      : block.description,
+                  note: typeof action.params?.note === 'string' ? action.params.note : block.note,
+                }
+              : block
+          );
+          nextSelectedLogicBlockId = action.targetNodeId;
+          return;
+        }
+
+        if (action.type === 'remove_custom_block' && action.targetNodeId) {
+          nextLogicBlocks = nextLogicBlocks.filter((block) => block.id !== action.targetNodeId);
+          if (nextSelectedLogicBlockId === action.targetNodeId) {
+            nextSelectedLogicBlockId = null;
+          }
+          return;
+        }
+
+        if (action.type === 'update_node_params' && action.targetNodeId === 'generate') {
+          if (typeof action.params?.removeSilences === 'boolean') {
+            nextRemoveSilences = action.params.removeSilences;
+          }
+          if (typeof action.params?.shakingCaptions === 'boolean') {
+            nextShakingCaptions = action.params.shakingCaptions;
+          }
+          if (typeof action.params?.faceFocus === 'boolean') {
+            nextFaceFocus = action.params.faceFocus;
+          }
+          if (typeof action.params?.safeFaceFrame === 'boolean') {
+            nextSafeFaceFrame = action.params.safeFaceFrame;
+          }
+          if (
+            action.params?.focusPreference === 'auto' ||
+            action.params?.focusPreference === 'speaker' ||
+            action.params?.focusPreference === 'reaction' ||
+            action.params?.focusPreference === 'group'
+          ) {
+            nextFocusPreference = action.params.focusPreference;
+          }
+          if (
+            action.params?.cameraMotionPreference === 'auto' ||
+            action.params?.cameraMotionPreference === 'steady' ||
+            action.params?.cameraMotionPreference === 'dynamic' ||
+            action.params?.cameraMotionPreference === 'shake'
+          ) {
+            nextCameraMotionPreference = action.params.cameraMotionPreference;
+          }
+          if (
+            action.params?.captionDensity === 'tight' ||
+            action.params?.captionDensity === 'balanced'
+          ) {
+            nextCaptionDensity = action.params.captionDensity;
+          }
+          if (
+            action.params?.viralStyle === 'balanced' ||
+            action.params?.viralStyle === 'aggressive'
+          ) {
+            nextViralStyle = action.params.viralStyle;
+          }
+        }
+      });
+
+      if (shouldTranscribe && !nextTranscriptionPublicId && sourceAsset?.publicId) {
+        nextTranscriptionPublicId = sourceAsset.publicId;
+      }
+
+      setEditRemoveSilences(nextRemoveSilences);
+      setEditShakingCaptions(nextShakingCaptions);
+      setEditFaceFocus(nextFaceFocus);
+      setEditSafeFaceFrame(nextSafeFaceFrame);
+      setAgentFocusPreference(nextFocusPreference);
+      setAgentCameraMotionPreference(nextCameraMotionPreference);
+      setAgentCaptionDensity(nextCaptionDensity);
+      setAgentViralStyle(nextViralStyle);
+      setAgentVariantCount(nextVariantCount);
+      setLogicBlocks(nextLogicBlocks);
+      setSelectedLogicBlockId(nextSelectedLogicBlockId);
+      setActiveCoreNode(nextActiveCoreNode);
+      setTranscriptionPublicId(nextTranscriptionPublicId);
+      setErrorMessage('');
+      setStatusMessage(`Workflow agent updated Feature 1. ${response.summary}`);
+      setPendingAgentExecution(
+        shouldTranscribe || shouldRun
+          ? {
+              shouldTranscribe,
+              shouldRun,
+              notes: response.execution.notes,
+            }
+          : null
+      );
+
+      const executionSteps = [];
+      if (shouldTranscribe) {
+        executionSteps.push('transcription');
+      }
+      if (shouldRun) {
+        executionSteps.push('generation');
+      }
+
+      return executionSteps.length > 0
+        ? `Queued ${executionSteps.join(' and ')} through the current Feature 1 handlers.`
+        : `Applied ${response.actions.length} validated workflow action${response.actions.length === 1 ? '' : 's'}.`;
+    },
+    [
+      activeCoreNode,
+      agentCameraMotionPreference,
+      agentCaptionDensity,
+      agentFocusPreference,
+      agentVariantCount,
+      agentViralStyle,
+      coreNodes,
+      editFaceFocus,
+      editRemoveSilences,
+      editSafeFaceFrame,
+      editShakingCaptions,
+      logicBlocks,
+      result,
+      selectedLogicBlockId,
+      sourceAsset?.publicId,
+      transcriptionPublicId,
+    ]
+  );
+
+  const workflowAgent = useWorkflowAgent({
+    feature: 'feature1',
+    sessionUserKey,
+    getWorkflowGraph: buildCurrentWorkflowGraph,
+    applyResponse: applyFeature1AgentResponse,
+  });
+
+  useEffect(() => {
+    if (!pendingAgentExecution) {
+      return;
+    }
+
+    const execution = pendingAgentExecution;
+    setPendingAgentExecution(null);
+
+    void (async () => {
+      if (execution.shouldTranscribe && transcriptionPublicId.trim()) {
+        await handleTranscribe();
+      } else if (execution.shouldTranscribe && !transcriptText.trim()) {
+        setStatusMessage('Agent updated the graph, but transcription could not start because no Cloudinary source is selected.');
+      }
+
+      if (execution.shouldRun && sourceAsset) {
+        await handleGenerate();
+      } else if (execution.shouldRun && !sourceAsset) {
+        setStatusMessage('Agent updated the graph, but generation could not start because no source video is loaded.');
+      } else if (execution.notes.length) {
+        setStatusMessage(execution.notes.join(' '));
+      }
+    })();
+  }, [handleGenerate, handleTranscribe, pendingAgentExecution, sourceAsset, transcriptionPublicId, transcriptText]);
+
   const handleStartNew = () => {
     setActiveCoreNode('upload');
     setSourceAsset(null);
@@ -894,10 +1105,16 @@ export function Feature1Page({ session }: Feature1PageProps) {
     setResult(null);
     setFilteredClipIds(new Set());
     setVisualAnalysis(null);
+    setEditRemoveSilences(true);
+    setEditShakingCaptions(true);
+    setEditFaceFocus(true);
     setEditSafeFaceFrame(true);
-    setAgentPlan(null);
-    setAgentWish(AGENT_WISH_DEFAULT);
-    setAgentCanvasSummary(AGENT_CANVAS_SUMMARY_DEFAULT);
+    setAgentFocusPreference('auto');
+    setAgentCameraMotionPreference('auto');
+    setAgentCaptionDensity('balanced');
+    setAgentViralStyle('balanced');
+    setAgentVariantCount(1);
+    setPendingAgentExecution(null);
     setErrorMessage('');
     setStatusMessage('');
   };
@@ -905,6 +1122,8 @@ export function Feature1Page({ session }: Feature1PageProps) {
   if (!session) {
     return <Navigate replace to="/login" />;
   }
+
+  const feature1Workflow = buildCurrentWorkflowGraph();
 
   return (
     <div className="feature-page feature-page--builder">
@@ -928,69 +1147,6 @@ export function Feature1Page({ session }: Feature1PageProps) {
           The production actions still live inside the core nodes below.
         </p>
       </div>
-
-      <section className="feature-agent-stage">
-        <div className="agent-panel agent-panel--hero" data-testid="feature1-agent-panel">
-          <div className="agent-panel__hero-copy">
-            <div className="feature-page__kicker">Local pipeline agent</div>
-            <h2>Put the AI in charge of the flowchart</h2>
-            <p>
-              Describe the reel behavior you want. The local agent updates Feature 1 settings,
-              edits matching flow blocks on the canvas, and focuses the affected stage.
-            </p>
-            <div className="agent-panel__hero-chips">
-              <span>{logicBlocks.length} flow blocks live</span>
-              <span>Active stage: {coreNodeMap[activeCoreNode].label}</span>
-              <span>
-                Inspector: {selectedLogicBlock ? selectedLogicBlock.label : 'workflow overview'}
-              </span>
-            </div>
-          </div>
-
-          <div className="agent-panel__hero-controls">
-            <div className="agent-panel__header">
-              <div>
-                <h3>Flowchart editor</h3>
-                <p>Runs on Ollama locally and rewires the canvas before you generate.</p>
-              </div>
-              <span className="agent-panel__badge">{agentPlan?.model || 'Local model'}</span>
-            </div>
-            <textarea
-              className="agent-panel__input"
-              data-testid="feature1-agent-wish"
-              rows={4}
-              value={agentWish}
-              onChange={(event) => setAgentWish(event.target.value)}
-              placeholder="Example: keep the active speaker fully visible, tighten captions, and rework the flowchart for stronger hook scoring."
-            />
-            <div className="agent-panel__actions">
-              <button
-                className="btn btn--ghost btn--sm"
-                type="button"
-                onClick={() => void handleApplyAgent()}
-                disabled={isApplyingAgent}
-                data-testid="feature1-agent-apply"
-              >
-                {isApplyingAgent ? 'Planning…' : 'Apply Local AI Changes'}
-              </button>
-              <span>{agentPlan ? agentPlan.summary : agentCanvasSummary}</span>
-            </div>
-            <div className="agent-panel__flow-summary">
-              <span>{agentCanvasSummary}</span>
-              {agentPlan?.logicBlocks?.length ? (
-                <span>Flow edits requested: {agentPlan.logicBlocks.join(', ')}</span>
-              ) : null}
-            </div>
-            {agentPlan?.notes?.length ? (
-              <ul className="agent-panel__notes">
-                {agentPlan.notes.map((note) => (
-                  <li key={note}>{note}</li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        </div>
-      </section>
 
       <section className="flow-workspace flow-workspace--opal">
         <aside className="flow-library">
@@ -1112,95 +1268,201 @@ export function Feature1Page({ session }: Feature1PageProps) {
           </div>
         </div>
 
-        <aside className="flow-inspector flow-inspector--opal">
+        <aside className="flow-inspector flow-inspector--opal flow-inspector--tabs">
           <div className="flow-inspector__card">
-            <div className="flow-inspector__header">
-              <span className="feature-page__kicker">Inspector</span>
-              <h2>{selectedLogicBlock ? selectedLogicBlock.label : 'Workflow overview'}</h2>
-              <p>
-                {selectedLogicBlock
-                  ? 'Fine-tune this logic block and connect it to the right stage.'
-                  : 'Select a custom block to edit it, or keep building from the library.'}
-              </p>
-            </div>
+            <WorkflowSidebarTabs
+              className="workflow-sidebar-tabs"
+              defaultTabId={WORKFLOW_AGENT_ENABLED ? 'agent' : 'inspector'}
+              tabs={[
+                ...(WORKFLOW_AGENT_ENABLED
+                  ? [
+                      {
+                        id: 'agent',
+                        label: 'Agent',
+                        content: (
+                          <AgentChatPanel
+                            title="Agent-controlled workflow"
+                            subtitle="Describe the reel change you want. The agent mutates the graph, then uses the current transcribe and generate handlers."
+                            draft={workflowAgent.draft}
+                            isBusy={workflowAgent.isBusy}
+                            status={workflowAgent.status}
+                            error={workflowAgent.error}
+                            messages={workflowAgent.messages}
+                            response={workflowAgent.lastResponse}
+                            workflow={feature1Workflow}
+                            executionPlan={workflowAgent.lastResponse}
+                            composerTestId="feature1-agent-wish"
+                            sendTestId="feature1-agent-apply"
+                            onDraftChange={workflowAgent.setDraft}
+                            onSend={() => void workflowAgent.send()}
+                            onExportWorkflow={() =>
+                              downloadJsonFile(
+                                `feature1-workflow-${new Date().toISOString()}.json`,
+                                feature1Workflow
+                              )
+                            }
+                            onExportPlan={() =>
+                              workflowAgent.lastResponse
+                                ? downloadJsonFile(
+                                    `feature1-agent-plan-${new Date().toISOString()}.json`,
+                                    workflowAgent.lastResponse
+                                  )
+                                : undefined
+                            }
+                          />
+                        ),
+                      },
+                    ]
+                  : []),
+                {
+                  id: 'inspector',
+                  label: 'Inspector',
+                  content: selectedLogicBlock ? (
+                    <div className="flow-inspector__body">
+                      <div className="flow-inspector__header">
+                        <span className="feature-page__kicker">Inspector</span>
+                        <h2>{selectedLogicBlock.label}</h2>
+                        <p>Fine-tune this logic block and connect it to the right stage.</p>
+                      </div>
 
-            {selectedLogicBlock ? (
-              <div className="flow-inspector__body">
-                <label className="form-field">
-                  <span>Block label</span>
-                  <input
-                    value={selectedLogicBlock.label}
-                    onChange={(event) => updateSelectedLogicBlock({ label: event.target.value })}
-                  />
-                </label>
+                      <label className="form-field">
+                        <span>Block label</span>
+                        <input
+                          value={selectedLogicBlock.label}
+                          onChange={(event) => updateSelectedLogicBlock({ label: event.target.value })}
+                        />
+                      </label>
 
-                <label className="form-field">
-                  <span>Attach to stage</span>
-                  <select
-                    value={selectedLogicBlock.attachTo}
-                    onChange={(event) =>
-                      updateSelectedLogicBlock({ attachTo: event.target.value as CoreNodeId })
-                    }
-                  >
-                    {coreNodes.map((node) => (
-                      <option key={node.id} value={node.id}>
-                        {node.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                      <label className="form-field">
+                        <span>Attach to stage</span>
+                        <select
+                          value={selectedLogicBlock.attachTo}
+                          onChange={(event) =>
+                            updateSelectedLogicBlock({ attachTo: event.target.value as CoreNodeId })
+                          }
+                        >
+                          {coreNodes.map((node) => (
+                            <option key={node.id} value={node.id}>
+                              {node.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
 
-                <label className="form-field">
-                  <span>Description</span>
-                  <textarea
-                    rows={4}
-                    value={selectedLogicBlock.description}
-                    onChange={(event) =>
-                      updateSelectedLogicBlock({ description: event.target.value })
-                    }
-                  />
-                </label>
+                      <label className="form-field">
+                        <span>Description</span>
+                        <textarea
+                          rows={4}
+                          value={selectedLogicBlock.description}
+                          onChange={(event) =>
+                            updateSelectedLogicBlock({ description: event.target.value })
+                          }
+                        />
+                      </label>
 
-                <label className="form-field">
-                  <span>Logic note</span>
-                  <textarea
-                    rows={4}
-                    value={selectedLogicBlock.note}
-                    onChange={(event) => updateSelectedLogicBlock({ note: event.target.value })}
-                  />
-                </label>
+                      <label className="form-field">
+                        <span>Logic note</span>
+                        <textarea
+                          rows={4}
+                          value={selectedLogicBlock.note}
+                          onChange={(event) => updateSelectedLogicBlock({ note: event.target.value })}
+                        />
+                      </label>
 
-                <div className="flow-inspector__chips">
-                  <span className="flow-chip">Type: {selectedLogicBlock.type}</span>
-                  <span className="flow-chip">Theme: {selectedLogicBlock.tint}</span>
-                </div>
+                      <div className="flow-inspector__chips">
+                        <span className="flow-chip">Type: {selectedLogicBlock.type}</span>
+                        <span className="flow-chip">Theme: {selectedLogicBlock.tint}</span>
+                        {selectedLogicBlock.agentBlock ? <span className="flow-chip">Agent block</span> : null}
+                      </div>
 
-                <button className="btn btn--danger btn--sm" type="button" onClick={removeSelectedLogicBlock}>
-                  Remove block
-                </button>
-              </div>
-            ) : (
-              <div className="flow-inspector__body">
-                <div className="flow-overview-list">
-                  {coreNodes.map((node) => (
-                    <div className="flow-overview-list__item" key={node.id}>
-                      <strong>
-                        {node.icon} {node.label}
-                      </strong>
-                      <span>{getNodeStatus(node.id)}</span>
+                      {selectedLogicBlock.agentBlock ? (
+                        <div className="flow-inspector__summary">
+                          <strong>{selectedLogicBlock.agentBlock.blockName}</strong>
+                          <p>{selectedLogicBlock.agentBlock.provenance.creationReason}</p>
+                          <p>Backs: {selectedLogicBlock.agentBlock.provenance.backingCoreNodes.join(', ') || 'current flow'}</p>
+                        </div>
+                      ) : null}
+
+                      <button className="btn btn--danger btn--sm" type="button" onClick={removeSelectedLogicBlock}>
+                        Remove block
+                      </button>
                     </div>
-                  ))}
-                </div>
+                  ) : (
+                    <div className="flow-inspector__body">
+                      <div className="flow-inspector__header">
+                        <span className="feature-page__kicker">Inspector</span>
+                        <h2>Workflow overview</h2>
+                        <p>Select a custom block to edit it, or keep building from the library.</p>
+                      </div>
 
-                <div className="flow-inspector__summary">
-                  <strong>Opal-style builder surface</strong>
-                  <p>
-                    Core stages stay fixed conceptually, but the surrounding logic layer is built to
-                    grow with more scoring, QA, and export branches.
-                  </p>
-                </div>
-              </div>
-            )}
+                      <div className="flow-overview-list">
+                        {coreNodes.map((node) => (
+                          <div className="flow-overview-list__item" key={node.id}>
+                            <strong>
+                              {node.icon} {node.label}
+                            </strong>
+                            <span>{getNodeStatus(node.id)}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flow-inspector__summary">
+                        <strong>Opal-style builder surface</strong>
+                        <p>
+                          Core stages stay fixed conceptually, but the surrounding logic layer is built to
+                          grow with more scoring, QA, and export branches.
+                        </p>
+                        <p>Agent variant cap: {agentVariantCount}</p>
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  id: 'results',
+                  label: 'Results',
+                  content: (
+                    <div className="flow-inspector__body">
+                      <div className="flow-inspector__header">
+                        <span className="feature-page__kicker">Results</span>
+                        <h2>{result ? 'Latest reel batch' : 'No reels yet'}</h2>
+                        <p>
+                          {result
+                            ? 'The current batch stays editable in the main workflow panel.'
+                            : 'Generate reels from the current workflow or let the agent do it for you.'}
+                        </p>
+                      </div>
+
+                      {result ? (
+                        <>
+                          <div className="flow-inspector__chips">
+                            <span className="flow-chip">{result.clips.length} clips</span>
+                            <span className="flow-chip">{filteredClipIds.size} enabled</span>
+                            <span className="flow-chip">Caption density: {agentCaptionDensity}</span>
+                          </div>
+                          <div className="flow-inspector__summary">
+                            <strong>
+                              Recommended clip:{' '}
+                              {result.clips.find((clip) => clip.id === result.recommendedClipId)?.title ?? 'Pending'}
+                            </strong>
+                            <p>
+                              Transcript {result.transcriptUsed ? 'enabled' : 'off'} and visual analysis{' '}
+                              {result.visualSignalsUsed ? 'enabled' : 'off'}.
+                            </p>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flow-inspector__summary">
+                          <strong>Manual controls remain available</strong>
+                          <p>
+                            Upload, transcribe, generate, filter, and review results exactly as before.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ),
+                },
+              ]}
+            />
           </div>
         </aside>
       </section>
@@ -1615,7 +1877,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                               playsInline
                               preload="metadata"
                               poster={clip.posterUrl}
-                              src={clip.deliveryUrl}
+                              src={clip.previewUrl || clip.deliveryUrl || clip.aiPreviewUrl || clip.downloadUrl}
                               onMouseEnter={(e) => {
                                 const v = e.currentTarget;
                                 v.currentTime = 0;
@@ -1733,6 +1995,15 @@ export function Feature1Page({ session }: Feature1PageProps) {
                         const scorePercent = Math.round(clip.viralityScore);
                         const circumference = 2 * Math.PI * 38;
                         const strokeOffset = circumference - (scorePercent / 100) * circumference;
+                        const clipVideoSources = collectUniqueUrls([
+                          clip.deliveryUrl,
+                          clip.previewUrl,
+                          clip.aiPreviewUrl,
+                          clip.downloadUrl,
+                        ]);
+                        const cardVideoSrc = clipVideoSources[0] || '';
+                        const fallbackVideoSrcs = clipVideoSources.slice(1);
+                        const useRenderedVideo = clipVideoSources[0] === clip.deliveryUrl && Boolean(clip.deliveryUrl);
 
                         return (
                           <article
@@ -1744,14 +2015,18 @@ export function Feature1Page({ session }: Feature1PageProps) {
                               {recommended && <span className="reel-card-v2__badge">⭐ Best</span>}
                               {isTop && <span className="reel-card-v2__fire">🔥</span>}
                               <FaceDetectVideo
-                                src={clip.previewUrl || clip.aiPreviewUrl || clip.deliveryUrl}
+                                key={`${clip.id}:${clipVideoSources.join('|')}`}
+                                src={cardVideoSrc}
+                                fallbackSrcs={fallbackVideoSrcs}
                                 poster={clip.posterUrl}
                                 faceFocusEnabled={editFaceFocus}
+                                safeFrameEnabled={editSafeFaceFrame}
                                 captions={clipCaptionMap.get(clip.id) || []}
                                 captionsEnabled={Boolean(clipCaptionMap.get(clip.id)?.length)}
                                 captionVariant={editShakingCaptions ? 'shaking' : 'clean'}
                                 focusStrategy={clip.focusStrategy}
                                 cameraMotion={clip.cameraMotion}
+                                suppressLocalEffectsOnPrimarySource={useRenderedVideo}
                               />
                             </div>
 

@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Session } from '@supabase/supabase-js';
-import type { ReelHistoryEntry, SavedExport } from '../types';
+import type { BrainrotHistoryEntry, ReelHistoryEntry, SavedExport } from '../types';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -49,10 +49,15 @@ export function onSessionChange(callback: (session: Session | null) => void): ()
   };
 }
 
+type EmailAuthResult =
+  | { ok: true; session: Session | null }
+  | { ok: false; message: string };
+
 export async function signUpWithEmail(
   email: string,
-  password: string
-): Promise<{ ok: true } | { ok: false; message: string }> {
+  password: string,
+  displayName?: string
+): Promise<EmailAuthResult> {
   if (!supabase) {
     return {
       ok: false,
@@ -60,9 +65,18 @@ export async function signUpWithEmail(
     };
   }
 
-  const { error } = await supabase.auth.signUp({
-    email,
+  const trimmedDisplayName = displayName?.trim();
+  const { data, error } = await supabase.auth.signUp({
+    email: email.trim(),
     password,
+    options: trimmedDisplayName
+      ? {
+          data: {
+            display_name: trimmedDisplayName,
+            name: trimmedDisplayName,
+          },
+        }
+      : undefined,
   });
 
   if (error) {
@@ -72,13 +86,16 @@ export async function signUpWithEmail(
     };
   }
 
-  return { ok: true };
+  return {
+    ok: true,
+    session: data.session,
+  };
 }
 
 export async function signInWithEmail(
   email: string,
   password: string
-): Promise<{ ok: true } | { ok: false; message: string }> {
+): Promise<EmailAuthResult> {
   if (!supabase) {
     return {
       ok: false,
@@ -86,8 +103,8 @@ export async function signInWithEmail(
     };
   }
 
-  const { error } = await supabase.auth.signInWithPassword({
-    email,
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: email.trim(),
     password,
   });
 
@@ -98,7 +115,10 @@ export async function signInWithEmail(
     };
   }
 
-  return { ok: true };
+  return {
+    ok: true,
+    session: data.session,
+  };
 }
 
 export async function signOutCurrentUser(): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -214,5 +234,79 @@ export async function fetchReelHistory(
       recommendedClipId: row.recommended_clip_id,
       result: row.payload as ReelHistoryEntry['result'],
     })),
+  };
+}
+
+export async function persistBrainrotHistoryEntry(
+  userId: string,
+  entry: BrainrotHistoryEntry
+): Promise<{ persisted: boolean; reason?: string }> {
+  if (!supabase) {
+    return {
+      persisted: false,
+      reason: 'Supabase browser env vars are not configured.',
+    };
+  }
+
+  const primaryRender = entry.renders[0] ?? null;
+  const { error } = await supabase.from('brainrot_generations').upsert({
+    id: entry.id,
+    user_id: userId,
+    prompt: entry.prompt,
+    script_guidance: entry.scriptGuidance,
+    template_id: entry.templateId,
+    brainrot_type: entry.brainrotType,
+    selected_voice_id: entry.selectedVoiceId,
+    selected_gameplay_preset_id: entry.selectedGameplayPresetId,
+    selected_caption_preset_id: entry.selectedCaptionPresetId,
+    gameplay_start_offset: entry.gameplayStartOffset,
+    target_duration_seconds: entry.targetDurationSeconds,
+    render_count: entry.renders.length,
+    primary_render_title: primaryRender?.script.title ?? null,
+    primary_delivery_url: primaryRender?.deliveryUrl ?? null,
+    payload: entry,
+    run_signature: entry.runSignature,
+    created_at: entry.createdAt,
+  });
+
+  if (error) {
+    return {
+      persisted: false,
+      reason: error.message,
+    };
+  }
+
+  return { persisted: true };
+}
+
+export async function fetchBrainrotHistory(
+  userId: string
+): Promise<{ ok: true; entries: BrainrotHistoryEntry[] } | { ok: false; message: string }> {
+  if (!supabase) {
+    return {
+      ok: false,
+      message: 'Supabase browser env vars are not configured.',
+    };
+  }
+
+  const { data, error } = await supabase
+    .from('brainrot_generations')
+    .select('id, payload')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(10);
+
+  if (error) {
+    return {
+      ok: false,
+      message: error.message,
+    };
+  }
+
+  return {
+    ok: true,
+    entries: (data ?? [])
+      .map((row) => row.payload as BrainrotHistoryEntry | null)
+      .filter((entry): entry is BrainrotHistoryEntry => Boolean(entry?.id)),
   };
 }
