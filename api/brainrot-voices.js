@@ -107,7 +107,8 @@ export default async function handler(req, res) {
             voices: [DEFAULT_VOICE],
             defaultVoiceId: DEFAULT_VOICE.id,
             fallback: true,
-            warning: 'No voice provider is configured. Set ELEVENLABS_API_KEY or GEMINI_API_KEY on the server.',
+            warning:
+              'No voice provider is configured. OpenRouter handles text generation only; set ELEVENLABS_API_KEY or GEMINI_API_KEY on the server for voice synthesis.',
           }),
     });
     return;

@@ -433,7 +433,9 @@ export default async function handler(req, res) {
   try {
     if (prefersGoogleVoice) {
       if (!googleApiKey) {
-        throw new Error('Google AI speech fallback is not configured. Set GEMINI_API_KEY on the server.');
+        throw new Error(
+          'Google AI speech fallback is not configured. OpenRouter text fallback does not cover TTS; set GEMINI_API_KEY on the server or switch to an ElevenLabs voice.'
+        );
       }
 
       const googleResponse = await synthesizeWithGoogleAi({
@@ -506,7 +508,8 @@ export default async function handler(req, res) {
     }
 
     res.status(500).json({
-      error: 'No voice provider is configured. Set ELEVENLABS_API_KEY or GEMINI_API_KEY on the server.',
+      error:
+        'No voice provider is configured. OpenRouter handles Gemini text fallback only; set ELEVENLABS_API_KEY or GEMINI_API_KEY on the server for voice synthesis.',
     });
   } catch (error) {
     res.status(500).json({

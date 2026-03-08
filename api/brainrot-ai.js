@@ -1,4 +1,5 @@
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+import { generateStructuredJson } from '../lib/llmProvider.js';
+
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 
 function normalizeBody(body) {
@@ -42,23 +43,6 @@ function isMeaningfullyChanged(original, next) {
   const cleanNext = normalizeComparableText(next);
 
   return Boolean(cleanNext && cleanOriginal !== cleanNext);
-}
-
-function parseGeminiText(payload) {
-  const text = payload?.candidates?.[0]?.content?.parts
-    ?.map((part) => ('text' in part ? part.text : ''))
-    .join('')
-    .trim();
-
-  if (!text) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }
 
 function titleCase(value) {
@@ -179,68 +163,39 @@ function buildEnhancePromptRequest(body, prompt, strictRewrite) {
   );
 }
 
-async function requestPromptEnhancement({ body, prompt, model, apiKey, strictRewrite = false }) {
-  const response = await fetch(`${GEMINI_API_URL}/${model}:generateContent`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
+async function requestPromptEnhancement({ body, prompt, model, strictRewrite = false }) {
+  const generation = await generateStructuredJson({
+    model,
+    schemaName: 'brainrot_prompt_enhancement',
+    systemInstruction: [
+      'You improve short-form reel prompts and script guidance.',
+      'Preserve the core topic, but rewrite the prompt into a stronger, more specific hook.',
+      'The revised prompt must be materially different from the original wording and still feel platform-agnostic.',
+      'When a previous script is provided, use it to identify what to fix instead of changing the concept completely.',
+      'Return JSON only.',
+    ].join('\n'),
+    userPrompt: buildEnhancePromptRequest(body, prompt, strictRewrite),
+    schema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string' },
+        scriptGuidance: { type: 'string' },
+      },
+      required: ['prompt', 'scriptGuidance'],
     },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [
-          {
-            text: [
-              'You improve short-form reel prompts and script guidance.',
-              'Preserve the core topic, but rewrite the prompt into a stronger, more specific hook.',
-              'The revised prompt must be materially different from the original wording and still feel platform-agnostic.',
-              'When a previous script is provided, use it to identify what to fix instead of changing the concept completely.',
-              'Return JSON only.',
-            ].join('\n'),
-          },
-        ],
-      },
-      contents: [
-        {
-          parts: [
-            {
-              text: buildEnhancePromptRequest(body, prompt, strictRewrite),
-            },
-          ],
-        },
-      ],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseJsonSchema: {
-          type: 'object',
-          properties: {
-            prompt: { type: 'string' },
-            scriptGuidance: { type: 'string' },
-          },
-          required: ['prompt', 'scriptGuidance'],
-        },
-        thinkingConfig: {
-          thinkingBudget: 0,
-        },
-      },
-    }),
+    thinkingBudget: 0,
+    temperature: strictRewrite ? 0.35 : 0.2,
   });
-
-  const payload = await response.json();
-
-  if (!response.ok) {
-    throw new Error(payload.error?.message || 'Gemini failed to enhance the prompt.');
-  }
-
-  const parsed = parseGeminiText(payload);
+  const parsed = generation.data;
 
   if (!parsed?.prompt || !parsed?.scriptGuidance) {
-    throw new Error('Gemini returned an invalid prompt enhancement payload.');
+    throw new Error('Model returned an invalid prompt enhancement payload.');
   }
 
   return {
     prompt: cleanText(parsed.prompt),
     scriptGuidance: cleanText(parsed.scriptGuidance),
+    warning: generation.warning,
   };
 }
 
@@ -250,67 +205,37 @@ async function handleGenerateNode({ prompt, model, apiKey }, res) {
     return;
   }
 
-  if (!apiKey) {
+  if (!apiKey && !process.env.OPENROUTER_API_KEY) {
     res.status(200).json(buildFallbackSuggestion(prompt));
     return;
   }
 
   try {
-    const response = await fetch(`${GEMINI_API_URL}/${model}:generateContent`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
+    const generation = await generateStructuredJson({
+      model,
+      schemaName: 'brainrot_node_suggestion',
+      systemInstruction:
+        'You translate short reel-editing instructions into compact flowchart notes. Output JSON only. Keep it practical, editable, and concrete.',
+      userPrompt: [
+        `Instruction: ${prompt}`,
+        'Return JSON with:',
+        '- title: 2 to 5 words',
+        '- body: one short sentence describing the edit or effect',
+        '- color: a hex color that matches the note mood',
+      ].join('\n'),
+      schema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          body: { type: 'string' },
+          color: { type: 'string' },
+        },
+        required: ['title', 'body', 'color'],
       },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [
-            {
-              text:
-                'You translate short reel-editing instructions into compact flowchart notes. Output JSON only. Keep it practical, editable, and concrete.',
-            },
-          ],
-        },
-        contents: [
-          {
-            parts: [
-              {
-                text: [
-                  `Instruction: ${prompt}`,
-                  'Return JSON with:',
-                  '- title: 2 to 5 words',
-                  '- body: one short sentence describing the edit or effect',
-                  '- color: a hex color that matches the note mood',
-                ].join('\n'),
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseJsonSchema: {
-            type: 'object',
-            properties: {
-              title: { type: 'string' },
-              body: { type: 'string' },
-              color: { type: 'string' },
-            },
-            required: ['title', 'body', 'color'],
-          },
-          thinkingConfig: {
-            thinkingBudget: 0,
-          },
-        },
-      }),
+      thinkingBudget: 0,
+      temperature: 0.2,
     });
-
-    const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error?.message || 'Gemini failed to build the flowchart node.');
-    }
-
-    const parsed = parseGeminiText(payload);
+    const parsed = generation.data;
     const fallback = buildFallbackSuggestion(prompt);
 
     res.status(200).json({
@@ -319,6 +244,7 @@ async function handleGenerateNode({ prompt, model, apiKey }, res) {
       color: /^#([\da-f]{3}|[\da-f]{6})$/i.test(cleanText(parsed?.color))
         ? cleanText(parsed.color)
         : fallback.color,
+      warning: generation.warning,
     });
   } catch {
     res.status(200).json(buildFallbackSuggestion(prompt));
@@ -331,8 +257,11 @@ async function handleEnhancePrompt({ body, prompt, model, apiKey }, res) {
     return;
   }
 
-  if (!apiKey) {
-    res.status(503).json({ error: 'Gemini is not configured. Set GEMINI_API_KEY on the server.' });
+  if (!apiKey && !process.env.OPENROUTER_API_KEY) {
+    res.status(503).json({
+      error:
+        'Gemini and OpenRouter are not configured. Set GEMINI_API_KEY or OPENROUTER_API_KEY on the server.',
+    });
     return;
   }
 
@@ -341,7 +270,6 @@ async function handleEnhancePrompt({ body, prompt, model, apiKey }, res) {
       body,
       prompt,
       model,
-      apiKey,
     });
 
     if (!isMeaningfullyRewritten(prompt, enhanced.prompt)) {
@@ -350,7 +278,6 @@ async function handleEnhancePrompt({ body, prompt, model, apiKey }, res) {
           body,
           prompt,
           model,
-          apiKey,
           strictRewrite: true,
         });
       } catch {
@@ -377,6 +304,7 @@ async function handleEnhancePrompt({ body, prompt, model, apiKey }, res) {
       prompt: nextPrompt,
       scriptGuidance: nextScriptGuidance,
       generatedAt: new Date().toISOString(),
+      warning: enhanced.warning,
     });
   } catch (error) {
     res.status(500).json({
