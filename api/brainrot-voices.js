@@ -80,6 +80,55 @@ const DEFAULT_VOICE = {
   previewUrl: '',
 };
 
+function getUniqueApiKeys(...values) {
+  const seen = new Set();
+
+  return values
+    .map((value) => String(value || '').trim())
+    .filter((value) => {
+      if (!value || seen.has(value)) {
+        return false;
+      }
+
+      seen.add(value);
+      return true;
+    });
+}
+
+async function loadElevenLabsVoices(apiKeys) {
+  let firstError = null;
+
+  for (let index = 0; index < apiKeys.length; index += 1) {
+    const apiKey = apiKeys[index];
+    const response = await fetch(ELEVENLABS_VOICES_URL, {
+      headers: {
+        'xi-api-key': apiKey,
+      },
+    });
+
+    const payload = await response.json();
+
+    if (response.ok) {
+      return payload;
+    }
+
+    const error = new Error(payload.detail?.message || payload.detail || 'Failed to load voices.');
+    firstError ||= error;
+
+    if (index === apiKeys.length - 1) {
+      if (firstError && firstError !== error) {
+        throw new Error(
+          `${firstError instanceof Error ? firstError.message : 'Primary ElevenLabs key failed.'} Fallback ElevenLabs key also failed. ${error instanceof Error ? error.message : 'Retry failed.'}`
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error('Failed to load voices.');
+}
+
 function fallbackPayload(warning) {
   return {
     voices: GOOGLE_VOICES,
@@ -96,36 +145,31 @@ export default async function handler(req, res) {
     return;
   }
 
-  const apiKey = process.env.ELEVENLABS_API_KEY;
+  const apiKeys = getUniqueApiKeys(
+    process.env.ELEVENLABS_API_KEY,
+    process.env.ELEVENLABS_FALLBACK_API_KEY
+  );
   const googleApiKey = process.env.GEMINI_API_KEY;
 
-  if (!apiKey) {
+  if (!apiKeys.length) {
     res.status(200).json({
       ...(googleApiKey
-        ? fallbackPayload('ELEVENLABS_API_KEY is not configured. Google AI voices are available instead.')
+        ? fallbackPayload(
+            'ELEVENLABS_API_KEY is not configured. Google AI voices are available instead.'
+          )
         : {
             voices: [DEFAULT_VOICE],
             defaultVoiceId: DEFAULT_VOICE.id,
             fallback: true,
             warning:
-              'No voice provider is configured. OpenRouter handles text generation only; set ELEVENLABS_API_KEY or GEMINI_API_KEY on the server for voice synthesis.',
+              'No voice provider is configured. OpenRouter handles text generation only; set ELEVENLABS_API_KEY, ELEVENLABS_FALLBACK_API_KEY, or GEMINI_API_KEY on the server for voice synthesis.',
           }),
     });
     return;
   }
 
   try {
-    const response = await fetch(ELEVENLABS_VOICES_URL, {
-      headers: {
-        'xi-api-key': apiKey,
-      },
-    });
-
-    const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.detail?.message || payload.detail || 'Failed to load voices.');
-    }
+    const payload = await loadElevenLabsVoices(apiKeys);
 
     const voices = Array.isArray(payload.voices)
       ? payload.voices

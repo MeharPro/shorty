@@ -70,6 +70,21 @@ function selectGoogleFallbackVoice(value) {
   return GOOGLE_FALLBACK_VOICES[hash % GOOGLE_FALLBACK_VOICES.length] || DEFAULT_GOOGLE_VOICE;
 }
 
+function getUniqueApiKeys(...values) {
+  const seen = new Set();
+
+  return values
+    .map((value) => cleanText(value))
+    .filter((value) => {
+      if (!value || seen.has(value)) {
+        return false;
+      }
+
+      seen.add(value);
+      return true;
+    });
+}
+
 function buildWordTimings(alignment) {
   if (
     !alignment ||
@@ -435,6 +450,35 @@ async function synthesizeWithGoogleAi({
   });
 }
 
+async function synthesizeWithElevenLabsFailover({ apiKeys, ...params }) {
+  let firstError = null;
+
+  for (let index = 0; index < apiKeys.length; index += 1) {
+    const apiKey = apiKeys[index];
+
+    try {
+      return await synthesizeWithElevenLabs({
+        ...params,
+        apiKey,
+      });
+    } catch (error) {
+      firstError ||= error;
+
+      if (index === apiKeys.length - 1) {
+        if (firstError && firstError !== error) {
+          throw new Error(
+            `${firstError instanceof Error ? firstError.message : 'Primary ElevenLabs key failed.'} Fallback ElevenLabs key also failed. ${error instanceof Error ? error.message : 'Retry failed.'}`
+          );
+        }
+
+        throw error;
+      }
+    }
+  }
+
+  throw new Error('ElevenLabs is not configured.');
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -442,7 +486,10 @@ export default async function handler(req, res) {
     return;
   }
 
-  const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
+  const elevenLabsApiKeys = getUniqueApiKeys(
+    process.env.ELEVENLABS_API_KEY,
+    process.env.ELEVENLABS_FALLBACK_API_KEY
+  );
   const googleApiKey = process.env.GEMINI_API_KEY;
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME || process.env.VITE_CLOUDINARY_CLOUD_NAME;
   const cloudinaryApiKey = process.env.CLOUDINARY_API_KEY;
@@ -501,10 +548,10 @@ export default async function handler(req, res) {
       return;
     }
 
-    if (elevenLabsApiKey) {
+    if (elevenLabsApiKeys.length) {
       try {
-        const elevenResponse = await synthesizeWithElevenLabs({
-          apiKey: elevenLabsApiKey,
+        const elevenResponse = await synthesizeWithElevenLabsFailover({
+          apiKeys: elevenLabsApiKeys,
           modelId: elevenLabsModelId,
           text,
           voiceId,
@@ -557,7 +604,7 @@ export default async function handler(req, res) {
 
     res.status(500).json({
       error:
-        'No voice provider is configured. OpenRouter handles Gemini text fallback only; set ELEVENLABS_API_KEY or GEMINI_API_KEY on the server for voice synthesis.',
+        'No voice provider is configured. OpenRouter handles Gemini text fallback only; set ELEVENLABS_API_KEY, ELEVENLABS_FALLBACK_API_KEY, or GEMINI_API_KEY on the server for voice synthesis.',
     });
   } catch (error) {
     res.status(500).json({
