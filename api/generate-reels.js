@@ -1,7 +1,7 @@
 import { Cloudinary } from '@cloudinary/url-gen';
 import { format, quality } from '@cloudinary/url-gen/actions/delivery';
 import { source } from '@cloudinary/url-gen/actions/overlay';
-import { fill, fillPad } from '@cloudinary/url-gen/actions/resize';
+import { fill } from '@cloudinary/url-gen/actions/resize';
 import { trim } from '@cloudinary/url-gen/actions/videoEdit';
 import { autoGravity, compass } from '@cloudinary/url-gen/qualifiers/gravity';
 import { focusOn as autoFocusOn } from '@cloudinary/url-gen/qualifiers/autoFocus';
@@ -19,16 +19,16 @@ const FEATURE1_CAPTION_STYLE = {
   backgroundColor: '#000000',
   backgroundVisible: false,
   fontFamily: 'Impact',
-  fontSize: 42,
+  fontSize: 30,
   fontWeight: 'bold',
   strokeColor: '#000000',
-  strokeWidth: 4,
+  strokeWidth: 3,
   placement: 'center',
   horizontalOffset: 0,
   verticalOffset: 0,
 };
 
-const CAPTION_LINE_LIMIT = 18;
+const CAPTION_LINE_LIMIT = 14;
 const CAPTION_MAX_LINES = 2;
 
 function clamp(value, min, max) {
@@ -74,9 +74,11 @@ function resolveCaptionStyle(editingOptions = {}) {
 
   return {
     ...FEATURE1_CAPTION_STYLE,
-    fontSize: shakingCaptions ? 46 : FEATURE1_CAPTION_STYLE.fontSize,
-    strokeWidth: shakingCaptions ? 5 : FEATURE1_CAPTION_STYLE.strokeWidth,
+    fontSize: shakingCaptions ? 32 : FEATURE1_CAPTION_STYLE.fontSize,
+    strokeWidth: shakingCaptions ? 4 : FEATURE1_CAPTION_STYLE.strokeWidth,
     maxWordsPerCue: editingOptions.captionDensity === 'tight' ? 2 : 3,
+    maxCharsPerLine: editingOptions.captionDensity === 'tight' ? 12 : 14,
+    maxLinesPerCue: CAPTION_MAX_LINES,
   };
 }
 
@@ -110,6 +112,42 @@ function splitFallbackCaptionLines(lines, fallbackText) {
   }
 
   return nextLines.slice(0, CAPTION_MAX_LINES);
+}
+
+function wrapCaptionWordsIntoLines(words, maxCharsPerLine, maxLines) {
+  const normalizedWords = Array.isArray(words)
+    ? words.map((word) => cleanText(word)).filter(Boolean)
+    : [];
+
+  if (!normalizedWords.length) {
+    return [];
+  }
+
+  const rows = [];
+  let current = '';
+
+  normalizedWords.forEach((word) => {
+    const candidate = current ? `${current} ${word}` : word;
+
+    if (candidate.length > maxCharsPerLine && current) {
+      if (rows.length < maxLines - 1) {
+        rows.push(current);
+        current = word;
+        return;
+      }
+
+      current = candidate;
+      return;
+    }
+
+    current = candidate;
+  });
+
+  if (current && rows.length < maxLines) {
+    rows.push(current);
+  }
+
+  return rows.slice(0, maxLines);
 }
 
 function buildCaptionLayers(line, captionStyle, offsetY) {
@@ -218,19 +256,10 @@ function buildRenderableClip({
   captionLines = [],
   fallbackText = '',
 }) {
-  const safeFaceFrame = editingOptions.safeFaceFrame !== false;
   const captionStyle = resolveCaptionStyle(editingOptions);
   const render = createSourceVideo(cld, sourceDescriptor)
     .videoEdit(trim().startOffset(startOffset).duration(duration))
-    .resize(
-      safeFaceFrame
-        ? fillPad().width(1080).height(1920).gravity(buildFocusGravity(editingOptions))
-        : fill().width(1080).height(1920).gravity(buildFocusGravity(editingOptions))
-    );
-
-  if (safeFaceFrame) {
-    render.backgroundColor('black');
-  }
+    .resize(fill().width(1080).height(1920).gravity(buildFocusGravity(editingOptions)));
 
   if (subtitleAsset?.publicId) {
     buildTimedSubtitlesTransformations(subtitleAsset, captionStyle).forEach((layer) => {
@@ -257,6 +286,7 @@ function buildRenderableClip({
 function buildPreviewClip({ cld, sourceDescriptor, startOffset, duration }) {
   return createSourceVideo(cld, sourceDescriptor)
     .videoEdit(trim().startOffset(startOffset).duration(duration))
+    .resize(fill().width(1080).height(1920).gravity(autoGravity().autoFocus(autoFocusOn(faces()))))
     .delivery(format('mp4'))
     .delivery(quality(autoQuality()))
     .toURL();
@@ -397,8 +427,11 @@ function formatSrtTimestamp(totalSeconds) {
   ].join(':') + `,${String(milliseconds).padStart(3, '0')}`;
 }
 
-function splitAlignedCueSegments(wordTimings, maxWordsPerCue) {
+function splitAlignedCueSegments(wordTimings, maxWordsPerCue, maxCharsPerLine, maxLinesPerCue) {
   const safeMaxWordsPerCue = clamp(maxWordsPerCue, 2, 6);
+  const safeMaxCharsPerLine = clamp(maxCharsPerLine, 8, 20);
+  const safeMaxLinesPerCue = clamp(maxLinesPerCue, 1, 3);
+  const safeMaxCharsPerCue = safeMaxCharsPerLine * safeMaxLinesPerCue;
   const segments = [];
   let current = [];
 
@@ -416,6 +449,14 @@ function splitAlignedCueSegments(wordTimings, maxWordsPerCue) {
   };
 
   wordTimings.forEach((word, index) => {
+    const candidateWords = [...current, word];
+    const candidateText = candidateWords.map((item) => item.text).join(' ');
+    const exceedsCharBudget = candidateText.length > safeMaxCharsPerCue;
+
+    if (current.length > 0 && exceedsCharBudget) {
+      flushCurrent();
+    }
+
     current.push(word);
 
     const isLast = index === wordTimings.length - 1;
@@ -439,8 +480,19 @@ function splitAlignedCueSegments(wordTimings, maxWordsPerCue) {
   return segments;
 }
 
-function buildAlignedSrt(wordTimings, durationSeconds, maxWordsPerCue) {
-  const segments = splitAlignedCueSegments(wordTimings, maxWordsPerCue);
+function buildAlignedSrt(
+  wordTimings,
+  durationSeconds,
+  maxWordsPerCue,
+  maxCharsPerLine,
+  maxLinesPerCue
+) {
+  const segments = splitAlignedCueSegments(
+    wordTimings,
+    maxWordsPerCue,
+    maxCharsPerLine,
+    maxLinesPerCue
+  );
 
   if (!segments.length) {
     throw new Error('No timed transcript words were available for this clip.');
@@ -463,7 +515,12 @@ function buildAlignedSrt(wordTimings, durationSeconds, maxWordsPerCue) {
 
     lines.push(String(lines.length / 4 + 1));
     lines.push(`${formatSrtTimestamp(startSeconds)} --> ${formatSrtTimestamp(endSeconds)}`);
-    lines.push(segment.text);
+    const wrappedText = wrapCaptionWordsIntoLines(
+      segment.text.split(/\s+/),
+      maxCharsPerLine,
+      maxLinesPerCue
+    ).join('\n');
+    lines.push(wrappedText || segment.text);
     lines.push('');
   });
 
@@ -500,7 +557,9 @@ async function maybeBuildSubtitleAsset({
   const { srt, cueCount } = buildAlignedSrt(
     wordTimings,
     clip.duration,
-    captionStyle.maxWordsPerCue
+    captionStyle.maxWordsPerCue,
+    captionStyle.maxCharsPerLine,
+    captionStyle.maxLinesPerCue
   );
   const publicId = `shorty/feature1/subtitles/${slugify(
     `${sourceKey}-${clip.id}-${clip.startOffset}`

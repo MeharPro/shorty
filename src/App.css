@@ -2695,6 +2695,12 @@
   stroke-dasharray: 10 10;
 }
 
+.brainrot-canvas__links path.brainrot-canvas__agent-link {
+  stroke: rgba(34, 211, 238, 0.5);
+  stroke-width: 2.5;
+  stroke-dasharray: 8 8;
+}
+
 .brainrot-node {
   position: absolute;
   min-width: 0;
@@ -3089,7 +3095,8 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: min(68%, 360px);
+  width: min(62%, 320px);
+  max-width: calc(100% - 40px);
   padding: 14px 16px 18px;
   border-radius: 18px;
   border: 1px dashed rgba(255, 255, 255, 0.22);
@@ -3123,6 +3130,7 @@
   line-height: 1.08;
   letter-spacing: -0.03em;
   text-wrap: balance;
+  overflow-wrap: anywhere;
 }
 
 .brainrot-caption-stage__resize {
@@ -5278,6 +5286,36 @@
   margin-top: 20px;
 }
 
+.asset-library__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.asset-library__caption {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.asset-library__state {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-glass);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.asset-library__state--error {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
 .recent-uploads__title {
   font-size: 0.85rem;
   font-weight: 600;
@@ -5355,6 +5393,13 @@
 .recent-uploads__meta {
   font-size: 0.72rem;
   color: var(--text-secondary);
+}
+
+@media (max-width: 640px) {
+  .asset-library__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 /* ── Generate Progress Animation ── */
@@ -6843,6 +6888,10 @@
   stroke: rgba(213, 0, 0, 0.34);
 }
 
+.brainrot-canvas__links path.brainrot-canvas__agent-link {
+  stroke: rgba(11, 132, 255, 0.36);
+}
+
 .brainrot-node,
 .brainrot-node--core,
 .brainrot-node--custom {
@@ -7044,6 +7093,10 @@
 
 [data-theme='dark'] .brainrot-canvas__links path {
   stroke: rgba(255, 77, 79, 0.42);
+}
+
+[data-theme='dark'] .brainrot-canvas__links path.brainrot-canvas__agent-link {
+  stroke: rgba(34, 211, 238, 0.56);
 }
 
 [data-theme='dark'] .brainrot-node,

@@ -19,9 +19,12 @@ export const BRAINROT_FRAME_WIDTH = 1080;
 export const BRAINROT_FRAME_HEIGHT = 1920;
 export const INTRO_CARD_DURATION_SECONDS = 3;
 const DEFAULT_CAPTION = 'Watch this one closely';
-const DEFAULT_GAMEPLAY_PUBLIC_ID = 'shorty/brainrot/subway-surfers-demo';
-const CAPTION_LINE_LIMIT = 22;
+const DEFAULT_GAMEPLAY_PUBLIC_ID = 'minecraft-gameplay';
+const CAPTION_LINE_LIMIT = 18;
 const CAPTION_MAX_LINES = 3;
+const CAPTION_SAFE_HORIZONTAL_OFFSET = 320;
+const CAPTION_SAFE_FONT_SIZE_MIN = 18;
+const CAPTION_SAFE_FONT_SIZE_MAX = 42;
 const INTRO_CARD_OVERLAY_OFFSET_Y = -160;
 
 export type BrainrotFontFamily = 'Arial' | 'Verdana' | 'Georgia' | 'Courier' | 'Impact';
@@ -42,9 +45,8 @@ export type BrainrotTypeId =
   | 'reddit-drama'
   | 'money-panic';
 export type BrainrotGameplayPresetId =
-  | 'subway-classic'
-  | 'subway-speedrun'
-  | 'subway-finale'
+  | 'minecraft-gameplay'
+  | 'subway-surfers'
   | 'satisfying-ice-cream'
   | 'satisfying-bubbles'
   | 'satisfying-soap'
@@ -131,9 +133,10 @@ export interface BrainrotGameplayPreset {
   label: string;
   tag: string;
   description: string;
-  source: 'local' | 'remote';
+  source: 'cloudinary' | 'local' | 'remote';
   defaultOffset: number;
   defaultGravity: BrainrotGravityMode;
+  publicId?: string;
   remoteUrl?: string;
   duration?: number;
 }
@@ -292,10 +295,11 @@ export const BRAINROT_TYPE_PRESETS: BrainrotTypePreset[] = [
 export const BRAINROT_TEMPLATE_PRESETS: BrainrotTemplatePreset[] = [
   {
     id: 'subway-template',
-    label: 'Subway Surfers Template',
+    label: 'Gameplay Story Template',
     tag: 'Classic',
-    description: 'Muted Subway Surfers gameplay under a tension-heavy story narration with centered captions.',
-    gameplayPresetId: 'subway-classic',
+    description:
+      'Cloudinary-hosted gameplay footage under a tension-heavy story narration with centered captions.',
+    gameplayPresetId: 'minecraft-gameplay',
     typeId: 'reddit-drama',
     captionPresetId: 'reddit-story',
     preferredVoiceGender: 'female',
@@ -330,31 +334,28 @@ export const BRAINROT_GAMEPLAY_GRAVITY_OPTIONS: BrainrotGravityMode[] = [
 
 export const BRAINROT_GAMEPLAY_PRESETS: BrainrotGameplayPreset[] = [
   {
-    id: 'subway-classic',
-    label: 'Subway Classic',
-    tag: 'Default',
-    description: 'The built-in Subway Surfers bed from src/assets, trimmed for the standard run.',
-    source: 'local',
+    id: 'minecraft-gameplay',
+    label: 'Minecraft Gameplay',
+    tag: 'Minecraft',
+    description:
+      'The Cloudinary-hosted minecraft-gameplay asset used as the default story background.',
+    source: 'cloudinary',
     defaultOffset: 18,
     defaultGravity: 'center',
+    publicId: 'minecraft-gameplay',
+    duration: 258,
   },
   {
-    id: 'subway-speedrun',
-    label: 'Speed Section',
-    tag: 'Fast',
-    description: 'The same local Subway clip, pushed into a later section with denser motion.',
-    source: 'local',
-    defaultOffset: 42,
+    id: 'subway-surfers',
+    label: 'Subway Surfers',
+    tag: 'Subway',
+    description:
+      'The Cloudinary-hosted subway surfers gameplay asset used as the alternate story background.',
+    source: 'cloudinary',
+    defaultOffset: 12,
     defaultGravity: 'center',
-  },
-  {
-    id: 'subway-finale',
-    label: 'Late Run',
-    tag: 'Dense',
-    description: 'The built-in Subway footage, but biased toward a later section with more visual noise.',
-    source: 'local',
-    defaultOffset: 74,
-    defaultGravity: 'south',
+    publicId: 'shorty/brainrot/subway-surfers-demo',
+    duration: 120,
   },
   {
     id: 'satisfying-ice-cream',
@@ -416,7 +417,7 @@ export const DEFAULT_BRAINROT_CAPTION_STYLE: BrainrotCaptionStyle = {
   backgroundColor: '#101828',
   backgroundVisible: false,
   fontFamily: 'Impact',
-  fontSize: 28,
+  fontSize: 26,
   fontWeight: 'bold',
   strokeColor: '#050505',
   strokeWidth: 3,
@@ -452,7 +453,7 @@ export const BRAINROT_CAPTION_STYLE_PRESETS: BrainrotCaptionStylePreset[] = [
       backgroundColor: '#000000',
       backgroundVisible: false,
       fontFamily: 'Impact',
-      fontSize: 36,
+      fontSize: 34,
       fontWeight: 'bold',
       strokeColor: '#000000',
       strokeWidth: 6,
@@ -473,7 +474,7 @@ export const BRAINROT_CAPTION_STYLE_PRESETS: BrainrotCaptionStylePreset[] = [
       backgroundColor: '#000000',
       backgroundVisible: false,
       fontFamily: 'Impact',
-      fontSize: 32,
+      fontSize: 30,
       fontWeight: 'bold',
       strokeColor: '#000000',
       strokeWidth: 5,
@@ -494,7 +495,7 @@ export const BRAINROT_CAPTION_STYLE_PRESETS: BrainrotCaptionStylePreset[] = [
       backgroundColor: '#000000',
       backgroundVisible: false,
       fontFamily: 'Impact',
-      fontSize: 34,
+      fontSize: 32,
       fontWeight: 'bold',
       strokeColor: '#0f172a',
       strokeWidth: 6,
@@ -515,7 +516,7 @@ export const BRAINROT_CAPTION_STYLE_PRESETS: BrainrotCaptionStylePreset[] = [
       backgroundColor: '#000000',
       backgroundVisible: false,
       fontFamily: 'Impact',
-      fontSize: 34,
+      fontSize: 32,
       fontWeight: 'bold',
       strokeColor: '#083344',
       strokeWidth: 6,
@@ -536,7 +537,7 @@ export const BRAINROT_CAPTION_STYLE_PRESETS: BrainrotCaptionStylePreset[] = [
       backgroundColor: '#000000',
       backgroundVisible: false,
       fontFamily: 'Impact',
-      fontSize: 28,
+      fontSize: 26,
       fontWeight: 'bold',
       strokeColor: '#000000',
       strokeWidth: 3,
@@ -559,6 +560,76 @@ export const FALLBACK_BRAINROT_VOICE: BrainrotVoiceOption = {
   },
   previewUrl: '',
 };
+
+function encodePublicIdForDelivery(publicId: string) {
+  return String(publicId || '')
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
+
+function buildCloudinaryVideoUrl(publicId: string) {
+  return `https://res.cloudinary.com/${cloudName}/video/upload/f_auto,q_auto/${encodePublicIdForDelivery(publicId)}.mp4`;
+}
+
+export function createCloudinaryBrainrotGameplayAsset(input: {
+  id: string;
+  label: string;
+  publicId: string;
+  duration?: number;
+}): MediaAsset | null {
+  const publicId = String(input.publicId || '').trim();
+
+  if (!cloudName || !publicId) {
+    return null;
+  }
+
+  return {
+    id: input.id,
+    label: input.label,
+    publicId,
+    secureUrl: buildCloudinaryVideoUrl(publicId),
+    source: 'upload',
+    strategy: 'cloudinary-public-id',
+    resourceType: 'video',
+    duration: input.duration,
+  };
+}
+
+export function createGameplayAssetFromPreset(
+  preset: BrainrotGameplayPreset
+): MediaAsset | null {
+  if (preset.source !== 'cloudinary' || !preset.publicId) {
+    return null;
+  }
+
+  return createCloudinaryBrainrotGameplayAsset({
+    id: preset.id,
+    label: preset.label,
+    publicId: preset.publicId,
+    duration: preset.duration,
+  });
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeCaptionStyle(captionStyle: BrainrotCaptionStyle): BrainrotCaptionStyle {
+  return {
+    ...captionStyle,
+    fontSize: clampNumber(
+      captionStyle.fontSize,
+      CAPTION_SAFE_FONT_SIZE_MIN,
+      CAPTION_SAFE_FONT_SIZE_MAX
+    ),
+    horizontalOffset: clampNumber(
+      captionStyle.horizontalOffset,
+      -CAPTION_SAFE_HORIZONTAL_OFFSET,
+      CAPTION_SAFE_HORIZONTAL_OFFSET
+    ),
+  };
+}
 
 function normalizeColor(value: string) {
   const trimmed = value.trim() || '#0f172a';
@@ -623,20 +694,21 @@ function splitCaptionLines(value: string): string[] {
 }
 
 function buildCaptionLayers(line: string, captionStyle: BrainrotCaptionStyle, offsetY: number) {
+  const safeCaptionStyle = normalizeCaptionStyle(captionStyle);
   const overlayText = sanitizeCaptionText(line) || DEFAULT_CAPTION;
-  const textSource = text(overlayText, buildTextStyle(captionStyle)).textColor(
-    normalizeColor(captionStyle.textColor)
+  const textSource = text(overlayText, buildTextStyle(safeCaptionStyle)).textColor(
+    normalizeColor(safeCaptionStyle.textColor)
   );
 
-  if (captionStyle.backgroundVisible) {
-    textSource.backgroundColor(normalizeColor(captionStyle.backgroundColor));
+  if (safeCaptionStyle.backgroundVisible) {
+    textSource.backgroundColor(normalizeColor(safeCaptionStyle.backgroundColor));
   }
 
   return [
     source(textSource).position(
       new Position()
-        .gravity(compass(captionStyle.placement))
-        .offsetX(captionStyle.horizontalOffset)
+        .gravity(compass(safeCaptionStyle.placement))
+        .offsetX(safeCaptionStyle.horizontalOffset)
         .offsetY(offsetY)
     ),
   ];
@@ -652,24 +724,25 @@ function buildTimedSubtitlesTransformations(
   subtitlesAsset: BrainrotSubtitleAsset,
   captionStyle: BrainrotCaptionStyle
 ) {
+  const safeCaptionStyle = normalizeCaptionStyle(captionStyle);
   const sourceParts = [
-    `co_${normalizeColor(captionStyle.textColor)}`,
-    `l_subtitles:${buildTextStyle(captionStyle, { includeStroke: false }).toString()}:${serializeOverlayPublicId(subtitlesAsset.publicId)}`,
+    `co_${normalizeColor(safeCaptionStyle.textColor)}`,
+    `l_subtitles:${buildTextStyle(safeCaptionStyle, { includeStroke: false }).toString()}:${serializeOverlayPublicId(subtitlesAsset.publicId)}`,
   ];
 
-  if (captionStyle.backgroundVisible) {
-    sourceParts.push(`b_${normalizeColor(captionStyle.backgroundColor)}`);
+  if (safeCaptionStyle.backgroundVisible) {
+    sourceParts.push(`b_${normalizeColor(safeCaptionStyle.backgroundColor)}`);
   }
 
-  if (captionStyle.strokeWidth > 0) {
+  if (safeCaptionStyle.strokeWidth > 0) {
     sourceParts.push(
-      `bo_${captionStyle.strokeWidth}px_solid_${normalizeColor(captionStyle.strokeColor)}`
+      `bo_${safeCaptionStyle.strokeWidth}px_solid_${normalizeColor(safeCaptionStyle.strokeColor)}`
     );
   }
 
-  const applyParts = [`fl_layer_apply`, `g_${captionStyle.placement}`];
+  const applyParts = [`fl_layer_apply`, `g_${safeCaptionStyle.placement}`];
 
-  applyParts.push(`x_${captionStyle.horizontalOffset}`, `y_${captionStyle.verticalOffset}`);
+  applyParts.push(`x_${safeCaptionStyle.horizontalOffset}`, `y_${safeCaptionStyle.verticalOffset}`);
 
   return [`${sourceParts.join(',')}/${applyParts.join(',')}`];
 }
@@ -711,6 +784,7 @@ function buildCompositeAsset(
   }: BrainrotCompositeOptions,
   { includeAudio = true }: { includeAudio?: boolean } = {}
 ) {
+  const safeCaptionStyle = normalizeCaptionStyle(captionStyle);
   const availableDuration = gameplayAsset.duration
     ? Math.max(1, gameplayAsset.duration - gameplayStartOffset)
     : null;
@@ -740,17 +814,17 @@ function buildCompositeAsset(
   }
 
   if (subtitlesAsset?.publicId) {
-    buildTimedSubtitlesTransformations(subtitlesAsset, captionStyle).forEach((layer) => {
+    buildTimedSubtitlesTransformations(subtitlesAsset, safeCaptionStyle).forEach((layer) => {
       render.addTransformation(layer);
     });
   } else {
     const captionLines = splitCaptionLines(captionText);
-    const lineOffset = Math.round(captionStyle.fontSize * 0.72);
+    const lineOffset = Math.round(safeCaptionStyle.fontSize * 0.72);
     const blockStartOffset =
-      captionStyle.verticalOffset - ((captionLines.length - 1) * lineOffset) / 2;
+      safeCaptionStyle.verticalOffset - ((captionLines.length - 1) * lineOffset) / 2;
 
     captionLines.forEach((line, index) => {
-      buildCaptionLayers(line, captionStyle, Math.round(blockStartOffset + index * lineOffset))
+      buildCaptionLayers(line, safeCaptionStyle, Math.round(blockStartOffset + index * lineOffset))
         .map((layer) =>
           introLeadInSeconds > 0
             ? layer.timeline(timelinePosition().startOffset(introLeadInSeconds))
@@ -881,20 +955,12 @@ interface BrainrotIntroCardResponse {
 }
 
 export function createFallbackBrainrotGameplayAsset(): MediaAsset | null {
-  if (!cloudName) {
-    return null;
-  }
-
-  return {
+  return createCloudinaryBrainrotGameplayAsset({
     id: DEFAULT_GAMEPLAY_PUBLIC_ID,
-    label: 'Subway Surfers Gameplay',
+    label: 'minecraft-gameplay',
     publicId: DEFAULT_GAMEPLAY_PUBLIC_ID,
-    secureUrl: `https://res.cloudinary.com/${cloudName}/video/upload/f_auto,q_auto/${DEFAULT_GAMEPLAY_PUBLIC_ID}.mp4`,
-    source: 'upload',
-    strategy: 'cloudinary-public-id',
-    resourceType: 'video',
     duration: 120,
-  };
+  });
 }
 
 export async function prepareBrainrotGameplayAsset(): Promise<PrepareGameplayResponse> {

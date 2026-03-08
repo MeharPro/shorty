@@ -26,6 +26,7 @@ import {
   buildBrainrotCompositePosterUrl,
   buildBrainrotCompositeUrl,
   buildBrainrotRunPlan,
+  createGameplayAssetFromPreset,
   enhanceBrainrotPrompt,
   fetchBrainrotVoices,
   generateBrainrotIntroCardAsset,
@@ -153,12 +154,12 @@ const DEFAULT_BATCH_SETTINGS: BrainrotBatchSettings = {
   scriptVariationMode: 'different-scripts',
 };
 const WORKFLOW_AGENT_ENABLED = import.meta.env.VITE_ENABLE_WORKFLOW_AGENT !== 'false';
-const CAPTION_GUIDE_LINE_LIMIT = 22;
+const CAPTION_GUIDE_LINE_LIMIT = 18;
 const CAPTION_GUIDE_MAX_LINES = 3;
 const CAPTION_PREVIEW_FONT_SCALE = 0.62;
 const CAPTION_FONT_SIZE_MIN = 18;
-const CAPTION_FONT_SIZE_MAX = 48;
-const CAPTION_HORIZONTAL_LIMIT = 420;
+const CAPTION_FONT_SIZE_MAX = 42;
+const CAPTION_HORIZONTAL_LIMIT = 320;
 const CAPTION_VERTICAL_LIMIT = 760;
 const PROMPT_FIELD_PLACEHOLDER = 'Pick a topic, randomize one, or enhance it with AI.';
 const INTRO_QUESTION_PLACEHOLDER = 'Opening question for the intro card.';
@@ -216,6 +217,108 @@ const TOPIC_PROMPT_LIBRARY: Record<BrainrotTypeId, string[]> = {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizeGameplayPresetIdValue(
+  value: string | BrainrotGameplayPresetId | null | undefined
+): BrainrotGameplayPresetId | '' {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase();
+
+  if (!normalized) {
+    return '';
+  }
+
+  const directMatch = BRAINROT_GAMEPLAY_PRESETS.find((preset) => preset.id === normalized);
+  if (directMatch) {
+    return directMatch.id;
+  }
+
+  if (
+    normalized === 'subway-classic' ||
+    normalized === 'subway-speedrun' ||
+    normalized === 'subway-finale'
+  ) {
+    return 'minecraft-gameplay';
+  }
+
+  if (/street bubbles?/.test(normalized)) {
+    return 'satisfying-street-bubbles';
+  }
+
+  if (/ice cream/.test(normalized)) {
+    return 'satisfying-ice-cream';
+  }
+
+  if (/soap/.test(normalized)) {
+    return 'satisfying-soap';
+  }
+
+  if (/bubble/.test(normalized)) {
+    return 'satisfying-bubbles';
+  }
+
+  if (/custom/.test(normalized) || /remote/.test(normalized)) {
+    return 'custom-remote';
+  }
+
+  if (/\bsubway surfers?\b|\bsubway gameplay\b|\bsubway\b/.test(normalized)) {
+    return 'subway-surfers';
+  }
+
+  if (
+    /\bminecraft-gameplay\b|\bminecraft gameplay\b|\bminecraft\b/.test(normalized) ||
+    /\bclassic\b|\bspeedrun\b|\bfinale\b|\bfast\b|\bfinal\b|\bdense\b/.test(normalized)
+  ) {
+    return 'minecraft-gameplay';
+  }
+
+  return '';
+}
+
+function isBuiltInRemoteGameplayPreset(preset: BrainrotGameplayPreset) {
+  return preset.source === 'remote' && preset.id !== 'custom-remote';
+}
+
+function isStoryGameplayPresetId(presetId: BrainrotGameplayPresetId) {
+  return presetId === 'minecraft-gameplay' || presetId === 'subway-surfers';
+}
+
+function findGameplayPreset(
+  presetId: string | BrainrotGameplayPresetId | null | undefined
+): BrainrotGameplayPreset {
+  const normalizedPresetId = normalizeGameplayPresetIdValue(presetId);
+
+  return (
+    BRAINROT_GAMEPLAY_PRESETS.find((preset) => preset.id === normalizedPresetId) ??
+    BRAINROT_GAMEPLAY_PRESETS[0]
+  );
+}
+
+function normalizeGameplayVariantPresetIds(
+  presetIds: unknown,
+  fallbackPresetId: BrainrotGameplayPresetId
+): BrainrotGameplayPresetId[] {
+  const normalized = Array.isArray(presetIds)
+    ? presetIds
+        .map((presetId) => normalizeGameplayPresetIdValue(String(presetId || '')))
+        .filter((presetId): presetId is BrainrotGameplayPresetId => Boolean(presetId))
+    : [];
+  const unique = [...new Set(normalized)];
+
+  return unique.length > 0 ? unique : [fallbackPresetId];
+}
+
+function buildGameplayBatchPresetIds(
+  presetIds: BrainrotGameplayPresetId[],
+  videoCount: number,
+  fallbackPresetId: BrainrotGameplayPresetId
+): BrainrotGameplayPresetId[] {
+  const normalized = normalizeGameplayVariantPresetIds(presetIds, fallbackPresetId);
+  const count = normalizeBatchVideoCount(videoCount);
+
+  return Array.from({ length: count }, (_, index) => normalized[index] ?? normalized[index % normalized.length]);
 }
 
 function delay(ms: number) {
@@ -300,19 +403,21 @@ function createInitialCanvasNodes(width: number, height: number): CanvasNode[] {
   }));
 }
 
-function createCoreLinkPath(fromNode: CoreCanvasNode, toNode: CoreCanvasNode) {
-  const fromCenterX = fromNode.x + CORE_NODE_WIDTH / 2;
-  const fromCenterY = fromNode.y + CORE_NODE_HEIGHT / 2;
-  const toCenterX = toNode.x + CORE_NODE_WIDTH / 2;
-  const toCenterY = toNode.y + CORE_NODE_HEIGHT / 2;
+function createCanvasLinkPath(fromNode: CanvasNode, toNode: CanvasNode) {
+  const fromBounds = getNodeBounds(fromNode);
+  const toBounds = getNodeBounds(toNode);
+  const fromCenterX = fromNode.x + fromBounds.width / 2;
+  const fromCenterY = fromNode.y + fromBounds.height / 2;
+  const toCenterX = toNode.x + toBounds.width / 2;
+  const toCenterY = toNode.y + toBounds.height / 2;
   const deltaX = toCenterX - fromCenterX;
   const deltaY = toCenterY - fromCenterY;
 
   if (Math.abs(deltaX) >= Math.abs(deltaY)) {
     const direction = deltaX >= 0 ? 1 : -1;
-    const startX = fromNode.x + (direction > 0 ? CORE_NODE_WIDTH : 0);
+    const startX = fromNode.x + (direction > 0 ? fromBounds.width : 0);
     const startY = fromCenterY;
-    const endX = toNode.x + (direction > 0 ? 0 : CORE_NODE_WIDTH);
+    const endX = toNode.x + (direction > 0 ? 0 : toBounds.width);
     const endY = toCenterY;
     const controlOffset = Math.max(56, Math.abs(deltaX) * 0.35);
 
@@ -321,12 +426,55 @@ function createCoreLinkPath(fromNode: CoreCanvasNode, toNode: CoreCanvasNode) {
 
   const direction = deltaY >= 0 ? 1 : -1;
   const startX = fromCenterX;
-  const startY = fromNode.y + (direction > 0 ? CORE_NODE_HEIGHT : 0);
+  const startY = fromNode.y + (direction > 0 ? fromBounds.height : 0);
   const endX = toCenterX;
-  const endY = toNode.y + (direction > 0 ? 0 : CORE_NODE_HEIGHT);
+  const endY = toNode.y + (direction > 0 ? 0 : toBounds.height);
   const controlOffset = Math.max(56, Math.abs(deltaY) * 0.35);
 
   return `M ${startX} ${startY} C ${startX} ${startY + controlOffset * direction}, ${endX} ${endY - controlOffset * direction}, ${endX} ${endY}`;
+}
+
+function createCoreLinkPath(fromNode: CoreCanvasNode, toNode: CoreCanvasNode) {
+  return createCanvasLinkPath(fromNode, toNode);
+}
+
+function buildAgentCanvasLinks(canvasNodes: CanvasNode[]) {
+  return canvasNodes
+    .filter(isCustomCanvasNode)
+    .flatMap((customNode) => {
+      const connectedNodeIds = [
+        ...new Set(customNode.agentBlock?.provenance?.backingCoreNodes?.filter(isCoreStageId) ?? []),
+      ];
+
+      if (!connectedNodeIds.length) {
+        return [];
+      }
+
+      const anchorNode = canvasNodes.find((node) => node.id === connectedNodeIds[0]);
+      if (!anchorNode) {
+        return [];
+      }
+
+      const links = [
+        {
+          id: `${anchorNode.id}-${customNode.id}`,
+          path: createCanvasLinkPath(anchorNode, customNode),
+        },
+      ];
+
+      connectedNodeIds.slice(1).forEach((connectedNodeId) => {
+        const targetNode = canvasNodes.find((node) => node.id === connectedNodeId);
+
+        if (targetNode) {
+          links.push({
+            id: `${customNode.id}-${targetNode.id}`,
+            path: createCanvasLinkPath(customNode, targetNode),
+          });
+        }
+      });
+
+      return links;
+    });
 }
 
 function formatDuration(seconds?: number): string {
@@ -337,6 +485,14 @@ function formatDuration(seconds?: number): string {
   const mins = Math.floor(seconds / 60);
   const remaining = Math.round(seconds % 60);
   return `${mins}:${remaining.toString().padStart(2, '0')}`;
+}
+
+function resolveRenderDurationSeconds(measuredVoiceDuration: number, fallbackDuration: number) {
+  const safeDuration = Number.isFinite(measuredVoiceDuration) && measuredVoiceDuration > 0
+    ? measuredVoiceDuration
+    : fallbackDuration;
+
+  return Math.max(1, Number(safeDuration.toFixed(2)));
 }
 
 function createLogEntry(message: string, tone: LogTone = 'info'): ActivityLogEntry {
@@ -437,7 +593,7 @@ function resolveCaptionGuideFontFamily(fontFamily: BrainrotFontFamily) {
 
 function resolveCaptionPreviewPosition(captionStyle: BrainrotCaptionStyle) {
   return {
-    left: `${clamp(50 + (captionStyle.horizontalOffset / BRAINROT_FRAME_WIDTH) * 100, 28, 72)}%`,
+    left: `${clamp(50 + (captionStyle.horizontalOffset / BRAINROT_FRAME_WIDTH) * 100, 30, 70)}%`,
     top: `${clamp(50 + (captionStyle.verticalOffset / BRAINROT_FRAME_HEIGHT) * 100, 10, 90)}%`,
     transform: 'translate(-50%, -50%)',
   };
@@ -780,6 +936,7 @@ function createRunSignature(input: {
   targetDurationSeconds: number;
   selectedVoiceId: string;
   selectedGameplayPresetId: BrainrotGameplayPresetId;
+  variantGameplayPresetIds: BrainrotGameplayPresetId[];
   remoteGameplayUrl: string;
   selectedCaptionPresetId: BrainrotCaptionPresetId;
   voiceSettings: BrainrotVoiceSettings;
@@ -986,6 +1143,9 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const [voicesWarning, setVoicesWarning] = useState('');
   const [selectedGameplayPresetId, setSelectedGameplayPresetId] =
     useState<BrainrotGameplayPresetId>(defaultTemplate.gameplayPresetId);
+  const [variantGameplayPresetIds, setVariantGameplayPresetIds] = useState<
+    BrainrotGameplayPresetId[]
+  >([defaultTemplate.gameplayPresetId]);
   const [localGameplayAsset, setLocalGameplayAsset] = useState<MediaAsset | null>(null);
   const [builtInRemoteGameplayAsset, setBuiltInRemoteGameplayAsset] = useState<MediaAsset | null>(null);
   const [remoteGameplayAsset, setRemoteGameplayAsset] = useState<MediaAsset | null>(null);
@@ -993,7 +1153,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const [voiceAsset, setVoiceAsset] = useState<BrainrotAudioAsset | null>(null);
   const [subtitleAsset, setSubtitleAsset] = useState<BrainrotSubtitleAsset | null>(null);
   const [gameplayStartOffset, setGameplayStartOffset] = useState(18);
-  const [isPreparingGameplay, setIsPreparingGameplay] = useState(true);
+  const [isPreparingGameplay, setIsPreparingGameplay] = useState(false);
   const [isPreparingRemoteGameplay, setIsPreparingRemoteGameplay] = useState(false);
   const [isResolvingGameplay, setIsResolvingGameplay] = useState(false);
   const [isGameplayCached, setIsGameplayCached] = useState(false);
@@ -1085,20 +1245,28 @@ export function Feature2Page({ session }: Feature2PageProps) {
     BRAINROT_GAMEPLAY_PRESETS.find((preset) => preset.id === selectedGameplayPresetId) ??
     BRAINROT_GAMEPLAY_PRESETS[0];
   const isCustomRemoteGameplayPreset = selectedGameplayPreset.id === 'custom-remote';
+  const selectedBuiltInCloudinaryGameplayAsset =
+    selectedGameplayPreset.source === 'cloudinary'
+      ? createGameplayAssetFromPreset(selectedGameplayPreset)
+      : null;
   const matchingBuiltInRemoteGameplayAsset =
     builtInRemoteGameplayAsset?.id === `preset-${selectedGameplayPreset.id}`
       ? builtInRemoteGameplayAsset
       : null;
   const gameplayAsset = isCustomRemoteGameplayPreset
     ? remoteGameplayAsset
-    : selectedGameplayPreset.source === 'remote'
+    : isBuiltInRemoteGameplayPreset(selectedGameplayPreset)
       ? matchingBuiltInRemoteGameplayAsset
-      : localGameplayAsset;
+      : selectedGameplayPreset.source === 'cloudinary'
+        ? selectedBuiltInCloudinaryGameplayAsset
+        : localGameplayAsset;
   const isGameplayBusy = isCustomRemoteGameplayPreset
     ? isResolvingGameplay
-    : selectedGameplayPreset.source === 'remote'
+    : isBuiltInRemoteGameplayPreset(selectedGameplayPreset)
       ? isPreparingRemoteGameplay
-      : isPreparingGameplay;
+      : selectedGameplayPreset.source === 'local'
+        ? isPreparingGameplay
+        : false;
   const preferredVoiceGender = selectedTemplate.preferredVoiceGender;
   const selectedVoice =
     voices.find((voice) => voice.id === selectedVoiceId) ??
@@ -1172,6 +1340,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
     targetDurationSeconds,
     selectedVoiceId,
     selectedGameplayPresetId,
+    variantGameplayPresetIds,
     remoteGameplayUrl,
     selectedCaptionPresetId,
     voiceSettings,
@@ -1385,8 +1554,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
     setIsPreparingGameplay(true);
 
     if (!quiet) {
-      setStatusMessage('Preparing the Subway Surfers gameplay bed.');
-      appendLog('Preparing gameplay bed from the local Subway Surfers asset.', 'info');
+      setStatusMessage('Preparing the minecraft-gameplay bed.');
+      appendLog('Preparing gameplay bed from the local minecraft-gameplay asset.', 'info');
     }
 
     try {
@@ -1421,7 +1590,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       const nextMessage =
         error instanceof Error
           ? error.message
-          : 'Failed to prepare the Subway Surfers gameplay clip.';
+          : 'Failed to prepare the minecraft-gameplay clip.';
 
       if (!quiet) {
         setStatusMessage(nextMessage);
@@ -1499,20 +1668,17 @@ export function Feature2Page({ session }: Feature2PageProps) {
     }
 
     dependenciesBootedRef.current = true;
+    const defaultGameplayPreset =
+      BRAINROT_GAMEPLAY_PRESETS.find((preset) => preset.id === defaultTemplate.gameplayPresetId) ??
+      BRAINROT_GAMEPLAY_PRESETS[0];
     void Promise.allSettled([
-      defaultTemplate.gameplayPresetId === 'custom-remote'
+      defaultGameplayPreset.id === 'custom-remote'
         ? Promise.resolve(null)
-        : (
-              BRAINROT_GAMEPLAY_PRESETS.find(
-                (preset) => preset.id === defaultTemplate.gameplayPresetId
-              ) ?? BRAINROT_GAMEPLAY_PRESETS[0]
-            ).source === 'remote'
-          ? prepareBuiltInRemoteGameplay(
-              BRAINROT_GAMEPLAY_PRESETS.find((preset) => preset.id === defaultTemplate.gameplayPresetId) ??
-                BRAINROT_GAMEPLAY_PRESETS[0],
-              { quiet: false }
-            )
-          : prepareGameplay({ quiet: false }),
+        : isBuiltInRemoteGameplayPreset(defaultGameplayPreset)
+          ? prepareBuiltInRemoteGameplay(defaultGameplayPreset, { quiet: false })
+          : defaultGameplayPreset.source === 'local'
+            ? prepareGameplay({ quiet: false })
+            : Promise.resolve(null),
       loadVoices(),
     ]);
     // Feature 2 should boot its dependencies immediately.
@@ -1747,11 +1913,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
       summary: isGameplayBusy
         ? isCustomRemoteGameplayPreset
           ? 'Resolving the remote gameplay feed.'
-          : selectedGameplayPreset.source === 'remote'
+          : isBuiltInRemoteGameplayPreset(selectedGameplayPreset)
             ? `Caching ${selectedGameplayPreset.label} in Cloudinary for stable rendering.`
-            : 'Preparing the built-in Subway gameplay bed from src/assets.'
+            : 'Preparing the built-in minecraft-gameplay bed from src/assets.'
         : gameplayAsset
-          ? selectedGameplayPreset.source === 'remote' && !isCustomRemoteGameplayPreset
+          ? isBuiltInRemoteGameplayPreset(selectedGameplayPreset)
             ? `${selectedGameplayPreset.label} is cached in Cloudinary and ready under the voiceover.`
             : `${selectedGameplayPreset.label} is ready under the voiceover.`
           : isCustomRemoteGameplayPreset
@@ -1759,16 +1925,18 @@ export function Feature2Page({ session }: Feature2PageProps) {
           : 'Gameplay prep failed. Retry this node.',
       code: isCustomRemoteGameplayPreset
         ? 'POST /api/gameplay { action: resolve-remote }'
-        : selectedGameplayPreset.source === 'remote'
+        : isBuiltInRemoteGameplayPreset(selectedGameplayPreset)
           ? 'POST /api/gameplay { action: prepare-remote }'
-          : 'POST /api/gameplay { action: prepare-local }',
+          : selectedGameplayPreset.source === 'cloudinary'
+            ? 'Cloudinary delivery URL from configured public ID'
+            : 'POST /api/gameplay { action: prepare-local }',
       status: isGameplayBusy
         ? 'running'
         : activeRunStage === 'gameplay'
           ? 'running'
           : gameplayAsset
             ? 'complete'
-            : selectedGameplayPreset.source === 'remote'
+            : isBuiltInRemoteGameplayPreset(selectedGameplayPreset)
               ? 'ready'
               : 'error',
     },
@@ -2060,6 +2228,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
     setSelectedCaptionPresetId(templateCaptionPreset.id);
     setCaptionStyle(templateCaptionPreset.style);
     setSelectedGameplayPresetId(templateGameplayPreset.id);
+    setVariantGameplayPresetIds([templateGameplayPreset.id]);
     setGameplayStartOffset(templateGameplayPreset.defaultOffset);
     setLayoutStyle((current) => ({
       ...current,
@@ -2086,7 +2255,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       if (!localGameplayAsset && !isPreparingGameplay) {
         void prepareGameplay();
       }
-    } else if (templateGameplayPreset.id !== 'custom-remote') {
+    } else if (isBuiltInRemoteGameplayPreset(templateGameplayPreset)) {
       void prepareBuiltInRemoteGameplay(templateGameplayPreset);
     }
 
@@ -2101,6 +2270,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       BRAINROT_GAMEPLAY_PRESETS[0];
 
     setSelectedGameplayPresetId(preset.id);
+    setVariantGameplayPresetIds([preset.id]);
     setGameplayStartOffset(preset.defaultOffset);
     setLayoutStyle((current) => ({
       ...current,
@@ -2111,11 +2281,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
       if (!localGameplayAsset && !isPreparingGameplay) {
         void prepareGameplay();
       }
-    } else if (preset.id !== 'custom-remote') {
+    } else if (isBuiltInRemoteGameplayPreset(preset)) {
       void prepareBuiltInRemoteGameplay(preset);
     }
 
-    if (preset.source === 'remote' && preset.id !== 'custom-remote') {
+    if (isBuiltInRemoteGameplayPreset(preset)) {
       setSelectedTemplateId('satisfying-template');
       setVoiceFilterMode('expressive-female');
       setSelectedVoiceId((current) =>
@@ -2123,7 +2293,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
           ? pickRecommendedVoiceId(voices, 'female')
           : FALLBACK_BRAINROT_VOICE.id
       );
-    } else if (preset.id === 'subway-classic' || preset.id === 'subway-speedrun' || preset.id === 'subway-finale') {
+    } else if (isStoryGameplayPresetId(preset.id)) {
       setSelectedTemplateId('subway-template');
       setVoiceFilterMode('expressive-female');
       setSelectedVoiceId((current) =>
@@ -2348,6 +2518,14 @@ export function Feature2Page({ session }: Feature2PageProps) {
       scriptVariationMode:
         options?.batchSettingsOverride?.scriptVariationMode ?? batchSettings.scriptVariationMode,
     };
+    const effectiveGameplayPresetIds = buildGameplayBatchPresetIds(
+      variantGameplayPresetIds,
+      effectiveBatchSettings.videoCount,
+      selectedGameplayPresetId
+    );
+    const effectiveGameplayPresets = effectiveGameplayPresetIds.map((presetId) =>
+      findGameplayPreset(presetId)
+    );
 
     if (!effectivePromptInput.trim()) {
       setSelectedNode('prompt');
@@ -2363,52 +2541,13 @@ export function Feature2Page({ session }: Feature2PageProps) {
       return;
     }
 
-    let ensuredGameplay = gameplayAsset;
-
-    if (selectedGameplayPreset.source === 'remote' && !ensuredGameplay) {
-      if (isCustomRemoteGameplayPreset) {
-        setSelectedNode('gameplay');
-        setStatusMessage('Attach a remote gameplay feed before running the pipeline.');
-        appendLog('Run blocked because the custom remote gameplay node is still empty.', 'error');
-        return;
-      }
-
-      try {
-        setSelectedNode('gameplay');
-        setActiveRunStage('gameplay');
-        appendLog(
-          `Built-in stock clip missing from Cloudinary. Caching ${selectedGameplayPreset.label} before the run continues.`,
-          'info'
-        );
-        ensuredGameplay = await prepareBuiltInRemoteGameplay(selectedGameplayPreset, { quiet: true });
-      } catch {
-        setActiveRunStage(null);
-        setSelectedNode('gameplay');
-        setStatusMessage('Gameplay bed could not be prepared.');
-        appendLog('Run stopped because the built-in stock gameplay failed.', 'error');
-        return;
-      }
-    }
-
-    if (!ensuredGameplay && selectedGameplayPreset.source === 'local') {
-      try {
-        setSelectedNode('gameplay');
-        setActiveRunStage('gameplay');
-        appendLog('Gameplay bed missing. Preparing it before the run continues.', 'info');
-        ensuredGameplay = await prepareGameplay({ quiet: true });
-      } catch {
-        setActiveRunStage(null);
-        setSelectedNode('gameplay');
-        setStatusMessage('Gameplay bed could not be prepared.');
-        appendLog('Run stopped because the gameplay node failed.', 'error');
-        return;
-      }
-    }
-
-    if (!ensuredGameplay) {
+    if (
+      effectiveGameplayPresets.some((preset) => preset.id === 'custom-remote') &&
+      !remoteGameplayAsset
+    ) {
       setSelectedNode('gameplay');
-      setStatusMessage('Gameplay bed could not be prepared.');
-      appendLog('Run stopped because the gameplay node is still empty.', 'error');
+      setStatusMessage('Attach a remote gameplay feed before running the pipeline.');
+      appendLog('Run blocked because one of the requested gameplay branches needs a remote feed.', 'error');
       return;
     }
 
@@ -2424,23 +2563,95 @@ export function Feature2Page({ session }: Feature2PageProps) {
       `Running ${effectiveBatchSettings.videoCount} AI reel${effectiveBatchSettings.videoCount === 1 ? '' : 's'}.`
     );
     appendLog('Run started. Executing the graph in code order.', 'info');
+    if (new Set(effectiveGameplayPresets.map((preset) => preset.label)).size > 1) {
+      appendLog(
+        `Gameplay router armed for ${effectiveGameplayPresets.map((preset) => preset.label).join(', ')}.`,
+        'info'
+      );
+    }
 
     try {
       const nextGeneratedRenders: GeneratedRender[] = [];
       const priorScripts: BrainrotScriptPackage[] = [];
       const shouldReuseScriptAssets =
         manualScriptMode || effectiveBatchSettings.scriptVariationMode === 'same-script';
-      const safeOffset = ensuredGameplay.duration
-        ? clamp(
-            safeGameplayOffset,
-            0,
-            Math.max(0, Math.floor((ensuredGameplay.duration ?? 120) - targetDurationSeconds))
-          )
-        : Math.max(0, safeGameplayOffset);
+      const gameplayAssetCache = new Map<BrainrotGameplayPresetId, MediaAsset>();
       let cachedScript: BrainrotScriptPackage | null = null;
       let cachedVoiceResponse: BrainrotVoiceResponse | null = null;
       let cachedSubtitleAsset: BrainrotSubtitleAsset | null = null;
       let cachedClipDuration: number | null = null;
+
+      const primeLocalGameplayCache = (asset: MediaAsset) => {
+        gameplayAssetCache.set('minecraft-gameplay', asset);
+      };
+
+      if (localGameplayAsset) {
+        primeLocalGameplayCache(localGameplayAsset);
+      }
+
+      if (remoteGameplayAsset) {
+        gameplayAssetCache.set('custom-remote', remoteGameplayAsset);
+      }
+
+      if (selectedBuiltInCloudinaryGameplayAsset) {
+        gameplayAssetCache.set(selectedGameplayPreset.id, selectedBuiltInCloudinaryGameplayAsset);
+      }
+
+      if (
+        isBuiltInRemoteGameplayPreset(selectedGameplayPreset) &&
+        matchingBuiltInRemoteGameplayAsset
+      ) {
+        gameplayAssetCache.set(selectedGameplayPreset.id, matchingBuiltInRemoteGameplayAsset);
+      }
+
+      const resolveGameplayAssetForPreset = async (preset: BrainrotGameplayPreset) => {
+        if (preset.source === 'cloudinary') {
+          const cachedPresetAsset = gameplayAssetCache.get(preset.id);
+          if (cachedPresetAsset) {
+            return cachedPresetAsset;
+          }
+
+          const builtInAsset = createGameplayAssetFromPreset(preset);
+          if (!builtInAsset) {
+            throw new Error(`${preset.label} is missing a valid Cloudinary public ID.`);
+          }
+
+          gameplayAssetCache.set(preset.id, builtInAsset);
+          return builtInAsset;
+        }
+
+        if (preset.source === 'local') {
+          const cachedLocalAsset = gameplayAssetCache.get(preset.id);
+          if (cachedLocalAsset) {
+            return cachedLocalAsset;
+          }
+
+          const preparedLocalAsset = await prepareGameplay({ quiet: true });
+          primeLocalGameplayCache(preparedLocalAsset);
+          return preparedLocalAsset;
+        }
+
+        if (preset.id === 'custom-remote') {
+          const customRemoteAsset =
+            gameplayAssetCache.get('custom-remote') ?? remoteGameplayAsset ?? null;
+
+          if (!customRemoteAsset) {
+            throw new Error('Attach a remote gameplay feed before running the pipeline.');
+          }
+
+          gameplayAssetCache.set('custom-remote', customRemoteAsset);
+          return customRemoteAsset;
+        }
+
+        const cachedRemoteAsset = gameplayAssetCache.get(preset.id);
+        if (cachedRemoteAsset) {
+          return cachedRemoteAsset;
+        }
+
+        const preparedRemoteAsset = await prepareBuiltInRemoteGameplay(preset, { quiet: true });
+        gameplayAssetCache.set(preset.id, preparedRemoteAsset);
+        return preparedRemoteAsset;
+      };
 
       if (manualScriptMode && scriptDraft.trim() && effectiveBatchSettings.videoCount > 1) {
         appendLog(
@@ -2459,6 +2670,18 @@ export function Feature2Page({ session }: Feature2PageProps) {
           effectiveBatchSettings.videoCount > 1
             ? `[${index + 1}/${effectiveBatchSettings.videoCount}] `
             : '';
+        const batchGameplayPreset = effectiveGameplayPresets[index] ?? selectedGameplayPreset;
+        const batchGameplayStartOffset =
+          batchGameplayPreset.id === selectedGameplayPresetId
+            ? safeGameplayOffset
+            : Math.max(0, batchGameplayPreset.defaultOffset);
+        const batchLayoutStyle =
+          batchGameplayPreset.id === selectedGameplayPresetId
+            ? layoutStyle
+            : {
+                ...layoutStyle,
+                gameplayGravity: batchGameplayPreset.defaultGravity,
+              };
 
         let baseScript: BrainrotScriptPackage;
 
@@ -2565,24 +2788,42 @@ export function Feature2Page({ session }: Feature2PageProps) {
           throw new Error('Voice synthesis did not return an audio asset.');
         }
 
+        let ensuredGameplay: MediaAsset;
         const measuredVoiceDuration =
           voiceResponse.durationSeconds || voiceResponse.audioAsset.duration || targetDurationSeconds;
+
+        setActiveRunStage('gameplay');
+        setSelectedNode('gameplay');
+
+        try {
+          ensuredGameplay = await resolveGameplayAssetForPreset(batchGameplayPreset);
+          appendLog(
+            batchPrefix +
+              (batchGameplayPreset.id === 'custom-remote'
+                ? 'Gameplay bed ready. Reusing the attached remote gameplay feed.'
+                : isBuiltInRemoteGameplayPreset(batchGameplayPreset)
+                  ? `Gameplay bed ready. Reusing the cached ${batchGameplayPreset.label} clip.`
+                  : batchGameplayPreset.source === 'cloudinary'
+                    ? `Gameplay bed ready. Using the ${batchGameplayPreset.label} Cloudinary asset.`
+                  : `Gameplay bed ready. Reusing ${batchGameplayPreset.label}.`),
+            'info'
+          );
+        } catch (gameplayError) {
+          const nextMessage =
+            gameplayError instanceof Error
+              ? gameplayError.message
+              : 'Gameplay bed could not be prepared.';
+          setActiveRunStage(null);
+          setSelectedNode('gameplay');
+          setStatusMessage(nextMessage);
+          appendLog(nextMessage, 'error');
+          throw gameplayError instanceof Error ? gameplayError : new Error(nextMessage);
+        }
+
         const clipDuration: number =
           cachedClipDuration && shouldReuseScriptAssets
             ? cachedClipDuration
-            : ensuredGameplay.duration
-              ? clamp(
-                  Math.max(
-                    targetDurationSeconds,
-                    Math.ceil(measuredVoiceDuration + introLeadInSeconds + 1)
-                  ),
-                  TARGET_DURATION_MIN,
-                  Math.max(TARGET_DURATION_MIN, Math.floor(ensuredGameplay.duration))
-                )
-              : Math.max(
-                  targetDurationSeconds,
-                  Math.ceil(measuredVoiceDuration + introLeadInSeconds + 1)
-                );
+            : resolveRenderDurationSeconds(measuredVoiceDuration, targetDurationSeconds);
 
         if (shouldReuseScriptAssets && !cachedClipDuration) {
           cachedClipDuration = clipDuration;
@@ -2590,23 +2831,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
         const safeLoopOffset = ensuredGameplay.duration
           ? clamp(
-              safeOffset,
+              batchGameplayStartOffset,
               0,
               Math.max(0, Math.floor((ensuredGameplay.duration ?? 120) - clipDuration))
             )
-          : safeOffset;
-
-        setActiveRunStage('gameplay');
-        setSelectedNode('gameplay');
-        appendLog(
-          batchPrefix +
-            (isCustomRemoteGameplayPreset
-              ? 'Gameplay bed ready. Reusing the attached remote gameplay feed.'
-              : selectedGameplayPreset.source === 'remote'
-                ? `Gameplay bed ready. Reusing the cached ${selectedGameplayPreset.label} clip.`
-                : `Gameplay bed ready. Reusing ${selectedGameplayPreset.label}.`),
-          'info'
-        );
+          : batchGameplayStartOffset;
         await delay(120);
 
         setActiveRunStage('caption');
@@ -2689,7 +2918,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
           clipDuration,
           gameplayStartOffset: safeLoopOffset,
           captionStyle,
-          layoutStyle,
+          layoutStyle: batchLayoutStyle,
           introCard: effectiveIntroCard,
           introCardAsset,
         };
@@ -2700,10 +2929,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
         const plan = buildBrainrotRunPlan({
           brainrotType,
           voiceLabel: `${selectedVoice.name} via ${voiceProviderLabel}`,
-          gameplayLabel: ensuredGameplay.label,
+          gameplayLabel: batchGameplayPreset.label,
           captionText: effectiveCaption,
           captionStyle,
-          layoutStyle,
+          layoutStyle: batchLayoutStyle,
           durationSeconds: clipDuration,
           timedCaptions: Boolean(nextSubtitleAsset),
           introCard: effectiveIntroCard,
@@ -2724,7 +2953,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
           subtitleAsset: nextSubtitleAsset,
           voiceName: selectedVoice.name,
           voiceProvider: voiceResponse.provider,
-          gameplayLabel: ensuredGameplay.label,
+          selectedGameplayPresetId: batchGameplayPreset.id,
+          gameplayLabel: batchGameplayPreset.label,
           typeLabel: selectedTypePreset.label,
           durationSeconds: clipDuration,
         });
@@ -2753,6 +2983,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
         targetDurationSeconds,
         selectedVoiceId,
         selectedGameplayPresetId,
+        variantGameplayPresetIds: effectiveGameplayPresetIds,
         remoteGameplayUrl,
         selectedCaptionPresetId,
         voiceSettings,
@@ -2761,7 +2992,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
         captionStyle,
         layoutStyle,
         introCard: firstRender?.introCard || introCard,
-        gameplayStartOffset: safeOffset,
+        gameplayStartOffset: safeGameplayOffset,
         manualScriptMode,
         manualCaptionMode,
         batchSettings: effectiveBatchSettings,
@@ -2781,8 +3012,9 @@ export function Feature2Page({ session }: Feature2PageProps) {
         targetDurationSeconds,
         selectedVoiceId,
         selectedGameplayPresetId,
+        variantGameplayPresetIds: effectiveGameplayPresetIds,
         selectedCaptionPresetId,
-        gameplayStartOffset: safeOffset,
+        gameplayStartOffset: safeGameplayOffset,
         runSignature: completedRunSignature,
         batchSettings: effectiveBatchSettings,
         captionStyle,
@@ -2859,6 +3091,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
         targetDurationSeconds,
         selectedVoiceId,
         selectedGameplayPresetId,
+        variantGameplayPresetIds,
         videoCount: batchSettings.videoCount,
         renderState,
       }),
@@ -2875,6 +3108,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       scriptDraft,
       scriptGuidance,
       selectedGameplayPresetId,
+      variantGameplayPresetIds,
       selectedNode,
       selectedVoiceId,
       targetDurationSeconds,
@@ -2919,9 +3153,17 @@ export function Feature2Page({ session }: Feature2PageProps) {
       let nextManualCaptionMode = manualCaptionMode;
       let nextTargetDuration = targetDurationSeconds;
       let nextBatchSettings = { ...batchSettings };
+      let nextSelectedTemplateId = selectedTemplateId;
       let nextVoiceFilterMode = voiceFilterMode;
       let nextSelectedVoiceId = selectedVoiceId;
+      let nextSelectedGameplayPresetId = selectedGameplayPresetId;
+      let nextVariantGameplayPresetIds = [...variantGameplayPresetIds];
+      let nextGameplayStartOffset = gameplayStartOffset;
+      let nextLayoutStyle = { ...layoutStyle };
+      let nextRemoteGameplayUrl = remoteGameplayUrl;
       let shouldRun = response.execution.shouldRun;
+      let shouldPrepareLocalGameplay = false;
+      let requestedBuiltInRemoteGameplayPreset: BrainrotGameplayPreset | null = null;
 
       const buildAgentCustomNode = (block: CustomBlockDefinition) => {
         const customNodeCount = nextCanvasNodes.filter(isCustomCanvasNode).length;
@@ -2932,17 +3174,30 @@ export function Feature2Page({ session }: Feature2PageProps) {
         const viewportCenterY = canvasStage
           ? (canvasStage.scrollTop + canvasStage.clientHeight / 2) / canvasZoom
           : canvasSize.height / 2;
+        const connectedNodes = [
+          ...new Set(block.provenance.backingCoreNodes.filter(isCoreStageId)),
+        ]
+          .map((nodeId) => nextCanvasNodes.find((node) => node.id === nodeId))
+          .filter((node): node is CanvasNode => Boolean(node));
+        const connectedCenterX = connectedNodes.length
+          ? connectedNodes.reduce((sum, node) => sum + node.x + getNodeBounds(node).width / 2, 0) /
+            connectedNodes.length
+          : viewportCenterX;
+        const connectedCenterY = connectedNodes.length
+          ? connectedNodes.reduce((sum, node) => sum + node.y + getNodeBounds(node).height / 2, 0) /
+            connectedNodes.length
+          : viewportCenterY;
 
         return {
           id: `custom-${crypto.randomUUID()}`,
           kind: 'custom' as const,
           x: clamp(
-            Math.round(viewportCenterX - CUSTOM_NODE_WIDTH / 2 + customNodeCount * 14),
+            Math.round(connectedCenterX - CUSTOM_NODE_WIDTH / 2 + customNodeCount * 14),
             CANVAS_PADDING,
             canvasSize.width - CUSTOM_NODE_WIDTH - CANVAS_PADDING
           ),
           y: clamp(
-            Math.round(viewportCenterY - CUSTOM_NODE_HEIGHT / 2 + customNodeCount * 14),
+            Math.round(connectedCenterY - CUSTOM_NODE_HEIGHT / 2 + customNodeCount * 10),
             CANVAS_PADDING,
             canvasSize.height - CUSTOM_NODE_HEIGHT - CANVAS_PADDING
           ),
@@ -3063,6 +3318,76 @@ export function Feature2Page({ session }: Feature2PageProps) {
           return;
         }
 
+        if (action.type === 'update_node_params' && action.targetNodeId === 'gameplay') {
+          const requestedPresetId = normalizeGameplayPresetIdValue(
+            typeof action.params?.selectedGameplayPresetId === 'string'
+              ? action.params.selectedGameplayPresetId
+              : typeof action.params?.gameplayPresetId === 'string'
+                ? action.params.gameplayPresetId
+                : ''
+          );
+          const requestedVariantPresetIds = normalizeGameplayVariantPresetIds(
+            action.params?.variantGameplayPresetIds,
+            requestedPresetId || nextSelectedGameplayPresetId
+          );
+          const requestedPreset =
+            requestedPresetId || requestedVariantPresetIds.length > 0
+              ? findGameplayPreset(requestedPresetId || requestedVariantPresetIds[0])
+              : null;
+
+          if (requestedPreset) {
+            nextSelectedGameplayPresetId = requestedPreset.id;
+            nextVariantGameplayPresetIds =
+              requestedVariantPresetIds.length > 0
+                ? requestedVariantPresetIds
+                : [requestedPreset.id];
+            nextGameplayStartOffset = requestedPreset.defaultOffset;
+            nextLayoutStyle = {
+              ...nextLayoutStyle,
+              gameplayGravity: requestedPreset.defaultGravity,
+            };
+            nextSelectedNode = 'gameplay';
+
+            if (requestedPreset.source === 'local') {
+              shouldPrepareLocalGameplay = !localGameplayAsset && !isPreparingGameplay;
+              requestedBuiltInRemoteGameplayPreset = null;
+            } else if (isBuiltInRemoteGameplayPreset(requestedPreset)) {
+              requestedBuiltInRemoteGameplayPreset = requestedPreset;
+            } else {
+              requestedBuiltInRemoteGameplayPreset = null;
+            }
+
+            if (isBuiltInRemoteGameplayPreset(requestedPreset)) {
+              nextSelectedTemplateId = 'satisfying-template';
+              nextVoiceFilterMode = 'expressive-female';
+              nextSelectedVoiceId = voices.some((voice) => voice.id === nextSelectedVoiceId)
+                ? pickRecommendedVoiceId(voices, 'female')
+                : FALLBACK_BRAINROT_VOICE.id;
+            } else if (isStoryGameplayPresetId(requestedPreset.id)) {
+              nextSelectedTemplateId = 'subway-template';
+              nextVoiceFilterMode = 'expressive-female';
+              nextSelectedVoiceId = voices.some((voice) => voice.id === nextSelectedVoiceId)
+                ? pickRecommendedVoiceId(voices, 'female')
+                : FALLBACK_BRAINROT_VOICE.id;
+            }
+
+            if (nextVariantGameplayPresetIds.length > 1) {
+              nextBatchSettings = {
+                ...nextBatchSettings,
+                videoCount: normalizeBatchVideoCount(nextVariantGameplayPresetIds.length),
+                partLabelsEnabled: true,
+                scriptVariationMode: 'different-scripts',
+              };
+            }
+          }
+
+          if (typeof action.params?.remoteGameplayUrl === 'string') {
+            nextRemoteGameplayUrl = action.params.remoteGameplayUrl;
+          }
+
+          return;
+        }
+
         if (action.type === 'update_node_params' && action.targetNodeId === 'caption') {
           if (typeof action.params?.captionText === 'string') {
             nextCaptionText = action.params.captionText;
@@ -3087,6 +3412,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
       setCanvasNodes(nextCanvasNodes);
       setSelectedNode(nextSelectedNode);
+      setSelectedTemplateId(nextSelectedTemplateId);
       setPromptInput(nextPromptInput);
       setScriptGuidance(nextScriptGuidance);
       setCaptionText(nextCaptionText);
@@ -3095,6 +3421,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
       setBatchSettings(nextBatchSettings);
       setVoiceFilterMode(nextVoiceFilterMode);
       setSelectedVoiceId(nextSelectedVoiceId);
+      setSelectedGameplayPresetId(nextSelectedGameplayPresetId);
+      setVariantGameplayPresetIds(nextVariantGameplayPresetIds);
+      setGameplayStartOffset(nextGameplayStartOffset);
+      setLayoutStyle(nextLayoutStyle);
+      setRemoteGameplayUrl(nextRemoteGameplayUrl);
       setStatusMessage(response.summary);
       appendLog(response.summary, 'info');
       setPendingAgentRun(
@@ -3105,6 +3436,14 @@ export function Feature2Page({ session }: Feature2PageProps) {
             }
           : null
       );
+
+      if (shouldPrepareLocalGameplay) {
+        void prepareGameplay();
+      }
+
+      if (requestedBuiltInRemoteGameplayPreset) {
+        void prepareBuiltInRemoteGameplay(requestedBuiltInRemoteGameplayPreset, { quiet: true });
+      }
 
       return shouldRun
         ? 'Queued an automatic run through the current Feature 2 pipeline.'
@@ -3117,14 +3456,24 @@ export function Feature2Page({ session }: Feature2PageProps) {
       canvasSize.width,
       canvasZoom,
       captionText,
+      gameplayStartOffset,
+      layoutStyle,
+      localGameplayAsset,
+      isPreparingGameplay,
       manualCaptionMode,
       promptInput,
+      remoteGameplayUrl,
       scriptGuidance,
       selectedNode,
+      selectedGameplayPresetId,
+      variantGameplayPresetIds,
+      selectedTemplateId,
       selectedVoiceId,
       targetDurationSeconds,
       voiceFilterMode,
       voices,
+      prepareGameplay,
+      prepareBuiltInRemoteGameplay,
     ]
   );
 
@@ -3163,6 +3512,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
     return createCoreLinkPath(fromNode, toNode);
   });
+  const agentLinkPaths = buildAgentCanvasLinks(canvasNodes);
 
   if (!session) {
     return <Navigate replace to="/login" />;
@@ -3329,6 +3679,14 @@ export function Feature2Page({ session }: Feature2PageProps) {
                           />
                         ) : null
                       )}
+                      {agentLinkPaths.map((link) => (
+                        <path
+                          key={link.id}
+                          className="brainrot-canvas__agent-link"
+                          d={link.path}
+                          markerEnd="url(#brainrot-arrow)"
+                        />
+                      ))}
                     </svg>
 
                     {canvasNodes.map((node) =>
@@ -3871,14 +4229,18 @@ export function Feature2Page({ session }: Feature2PageProps) {
                     <div className="brainrot-static-card">
                       <span>Footage source</span>
                       <strong>
-                        {selectedGameplayPreset.source === 'remote'
+                        {isBuiltInRemoteGameplayPreset(selectedGameplayPreset)
                           ? 'Built-in satisfying stock clip'
-                          : 'Built-in Subway Surfers clip'}
+                          : selectedGameplayPreset.source === 'cloudinary'
+                            ? 'Cloudinary gameplay asset'
+                            : 'Built-in minecraft-gameplay clip'}
                       </strong>
                       <p>
-                        {selectedGameplayPreset.source === 'remote'
+                        {isBuiltInRemoteGameplayPreset(selectedGameplayPreset)
                           ? 'This template uses a direct free-stock satisfying video so it works without a manual upload.'
-                          : 'This template uses the local Subway Surfers gameplay cache and keeps the whole bed muted.'}
+                          : selectedGameplayPreset.source === 'cloudinary'
+                            ? `This preset streams directly from Cloudinary using ${selectedGameplayPreset.publicId}.`
+                            : 'This template uses the local minecraft-gameplay cache and keeps the whole bed muted.'}
                       </p>
                     </div>
                     {selectedGameplayPreset.source === 'local' ? (
@@ -3903,13 +4265,15 @@ export function Feature2Page({ session }: Feature2PageProps) {
                     <div className="brainrot-empty-state">
                       {isCustomRemoteGameplayPreset
                         ? 'Attach a remote gameplay feed to fill the frame.'
-                        : isPreparingGameplay
-                          ? 'Preparing the built-in Subway Surfers mezzanine for Cloudinary.'
+                        : isBuiltInRemoteGameplayPreset(selectedGameplayPreset)
+                          ? 'Caching the built-in satisfying stock clip in Cloudinary.'
+                          : isPreparingGameplay
+                          ? 'Preparing the built-in minecraft-gameplay mezzanine for Cloudinary.'
                           : 'Gameplay is missing. Retry this node.'}
                     </div>
                   )}
                 </div>
-                {selectedGameplayPreset.source === 'local' ? (
+                {!isCustomRemoteGameplayPreset && !isBuiltInRemoteGameplayPreset(selectedGameplayPreset) ? (
                   <label className="brainrot-range-field">
                     <div>
                       <span>Gameplay start offset</span>
@@ -3925,8 +4289,9 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   </label>
                 ) : (
                   <div className="brainrot-inline-note">
-                    Built-in satisfying clips start from the head and loop automatically to match
-                    the voiceover length.
+                    {isCustomRemoteGameplayPreset
+                      ? 'Attach a direct gameplay URL and the preview will use the resolved clip.'
+                      : 'Built-in satisfying clips start from the head and loop automatically to match the voiceover length.'}
                   </div>
                 )}
                 <label className="brainrot-form-field">
@@ -3965,8 +4330,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
                     <strong>
                       {isCustomRemoteGameplayPreset
                         ? 'Remote gameplay feed'
-                        : selectedGameplayPreset.source === 'remote'
+                        : isBuiltInRemoteGameplayPreset(selectedGameplayPreset)
                           ? 'Built-in satisfying stock'
+                        : selectedGameplayPreset.source === 'cloudinary'
+                          ? 'Cloudinary public ID'
                         : isGameplayFallback
                           ? 'Fallback Cloudinary asset'
                           : isGameplayCached
@@ -4443,7 +4810,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                     <strong>{selectedCustomNode.agentBlock.blockName}</strong>
                     <p>{selectedCustomNode.agentBlock.provenance.creationReason}</p>
                     <p>
-                      Backing nodes:{' '}
+                      Connected nodes:{' '}
                       {selectedCustomNode.agentBlock.provenance.backingCoreNodes.join(', ') || 'workflow graph'}
                     </p>
                   </div>
@@ -4688,8 +5055,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
                           <p>
                             {isCustomRemoteGameplayPreset
                               ? 'Using the attached remote gameplay feed.'
-                              : selectedGameplayPreset.source === 'remote'
+                              : isBuiltInRemoteGameplayPreset(selectedGameplayPreset)
                                 ? 'Using the built-in satisfying stock background.'
+                                : selectedGameplayPreset.source === 'cloudinary'
+                                  ? `Using the Cloudinary gameplay asset ${selectedGameplayPreset.publicId}.`
                                 : isGameplayFallback
                                   ? 'Using fallback Cloudinary asset.'
                                   : 'Using the local gameplay cache.'}

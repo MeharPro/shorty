@@ -8,6 +8,13 @@ import {
 
 import { buildPlayableSourceUrl, createMediaAssetFromUpload } from '../lib/rendering';
 import {
+  createCloudinarySourceVideoFromUpload,
+  createMediaAssetFromCloudinarySourceVideo,
+  createUploadHistoryItemFromCloudinarySourceVideo,
+  fetchFeature1SourceVideos,
+  type CloudinarySourceVideo,
+} from '../lib/cloudinarySourceVideos';
+import {
   loadReelHistory,
   saveReelHistory,
   loadUploadHistory,
@@ -603,10 +610,47 @@ export function Feature1Page({ session }: Feature1PageProps) {
   const [uploadHistory, setUploadHistory] = useState<UploadHistoryItem[]>(() =>
     loadUploadHistory(sessionUserKey)
   );
+  const [cloudinarySourceVideos, setCloudinarySourceVideos] = useState<CloudinarySourceVideo[]>([]);
+  const [isLoadingCloudinarySourceVideos, setIsLoadingCloudinarySourceVideos] = useState(false);
+  const [cloudinarySourceVideosError, setCloudinarySourceVideosError] = useState('');
 
   useEffect(() => {
     setUploadHistory(loadUploadHistory(sessionUserKey));
   }, [sessionUserKey]);
+
+  const syncUploadHistory = useCallback(
+    (item: UploadHistoryItem) => {
+      setUploadHistory((current) => {
+        const next = [item, ...current.filter((existing) => existing.publicId !== item.publicId)].slice(
+          0,
+          10
+        );
+        saveUploadHistory(next, sessionUserKey);
+        return next;
+      });
+    },
+    [sessionUserKey]
+  );
+
+  const loadCloudinarySourceVideos = useCallback(async () => {
+    setIsLoadingCloudinarySourceVideos(true);
+    setCloudinarySourceVideosError('');
+
+    try {
+      const videos = await fetchFeature1SourceVideos();
+      setCloudinarySourceVideos(videos);
+    } catch (error) {
+      setCloudinarySourceVideosError(
+        error instanceof Error ? error.message : 'Failed to load uploaded Cloudinary videos.'
+      );
+    } finally {
+      setIsLoadingCloudinarySourceVideos(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCloudinarySourceVideos();
+  }, [loadCloudinarySourceVideos]);
 
   const resetGeneratedState = useCallback(() => {
     setResult(null);
@@ -614,26 +658,80 @@ export function Feature1Page({ session }: Feature1PageProps) {
     setVisualAnalysis(null);
   }, []);
 
+  const handleSelectSourceAsset = useCallback(
+    (
+      asset: MediaAsset,
+      {
+        publicId,
+        label,
+        historyItem,
+        sourceDescription,
+      }: {
+        publicId: string;
+        label: string;
+        historyItem?: UploadHistoryItem;
+        sourceDescription: string;
+      }
+    ) => {
+      setSourceAsset(asset);
+      setTranscriptionPublicId(publicId);
+      resetGeneratedState();
+      setErrorMessage('');
+
+      if (historyItem) {
+        syncUploadHistory(historyItem);
+      }
+
+      const saved = sessionUserKey
+        ? loadTranscriptData(sessionUserKey, publicId)
+        : loadTranscriptData(publicId);
+
+      if (saved?.transcript) {
+        setTranscriptText(saved.transcript);
+        setTranscriptionDetails((current) => ({
+          transcript: saved.transcript,
+          provider: saved.provider || current?.provider || 'cloudinary',
+          model: saved.model || current?.model || 'auto_transcription',
+          publicId,
+          sourceUrl: saved.transcriptUrl || current?.sourceUrl || '',
+          transcriptUrl: saved.transcriptUrl || current?.transcriptUrl,
+          segments: saved.segments,
+          generatedAt: saved.generatedAt || current?.generatedAt || new Date().toISOString(),
+        }));
+        setStatusMessage(`Loaded "${label}" ${sourceDescription} with saved transcript.`);
+        return;
+      }
+
+      setTranscriptText(
+        sessionUserKey ? loadTranscript(sessionUserKey, publicId) : loadTranscript(publicId)
+      );
+      setTranscriptionDetails(null);
+      setStatusMessage(`Loaded "${label}" ${sourceDescription}.`);
+    },
+    [resetGeneratedState, sessionUserKey, syncUploadHistory]
+  );
+
   const handleSourceUploadSuccess = (uploadResult: CloudinaryUploadResult) => {
-    const asset = createMediaAssetFromUpload(uploadResult, uploadResult.original_filename || 'Uploaded Video');
+    const uploadedVideo = createCloudinarySourceVideoFromUpload(uploadResult);
+    const asset = createMediaAssetFromUpload(uploadResult, uploadedVideo.label);
+    const historyItem = createUploadHistoryItemFromCloudinarySourceVideo(uploadedVideo);
+
     setSourceAsset(asset);
     setTranscriptionPublicId(uploadResult.public_id);
     resetGeneratedState();
-    setStatusMessage('Video uploaded!');
+    setErrorMessage('');
+    setStatusMessage(`Uploaded and loaded "${uploadedVideo.label}".`);
 
-    // Save to upload history
-    const historyItem: UploadHistoryItem = {
-      id: asset.id,
-      publicId: uploadResult.public_id,
-      secureUrl: uploadResult.secure_url,
-      label: uploadResult.original_filename || 'Uploaded Video',
-      duration: uploadResult.duration,
-      thumbnailUrl: uploadResult.secure_url?.replace('/video/upload/', '/video/upload/w_240,h_135,c_fill,so_0/').replace(/\.[^.]+$/, '.jpg'),
-      uploadedAt: new Date().toISOString(),
-    };
-    const next = [historyItem, ...uploadHistory.filter(h => h.publicId !== uploadResult.public_id)].slice(0, 10);
-    setUploadHistory(next);
-    saveUploadHistory(next, sessionUserKey);
+    syncUploadHistory(historyItem);
+    setCloudinarySourceVideos((current) =>
+      [uploadedVideo, ...current.filter((item) => item.publicId !== uploadedVideo.publicId)]
+        .sort((left, right) => {
+          const leftTime = Date.parse(left.createdAt || '') || 0;
+          const rightTime = Date.parse(right.createdAt || '') || 0;
+          return rightTime - leftTime;
+        })
+        .slice(0, 40)
+    );
   };
 
   const handleSelectFromHistory = (item: UploadHistoryItem) => {
@@ -647,33 +745,21 @@ export function Feature1Page({ session }: Feature1PageProps) {
       strategy: 'cloudinary-public-id',
       duration: item.duration,
     };
-    setSourceAsset(asset);
-    setTranscriptionPublicId(item.publicId);
-    resetGeneratedState();
-    // Load any saved transcript for this video
-    const saved = sessionUserKey
-      ? loadTranscriptData(sessionUserKey, item.publicId)
-      : loadTranscriptData(item.publicId);
-    if (saved?.transcript) {
-      setTranscriptText(saved.transcript);
-      setTranscriptionDetails((current) => ({
-        transcript: saved.transcript,
-        provider: saved.provider || current?.provider || 'cloudinary',
-        model: saved.model || current?.model || 'auto_transcription',
-        publicId: item.publicId,
-        sourceUrl: saved.transcriptUrl || current?.sourceUrl || '',
-        transcriptUrl: saved.transcriptUrl || current?.transcriptUrl,
-        segments: saved.segments,
-        generatedAt: saved.generatedAt || current?.generatedAt || new Date().toISOString(),
-      }));
-      setStatusMessage(`Loaded "${item.label}" with saved transcript.`);
-    } else {
-      setTranscriptText(
-        sessionUserKey ? loadTranscript(sessionUserKey, item.publicId) : loadTranscript(item.publicId)
-      );
-      setTranscriptionDetails(null);
-      setStatusMessage(`Loaded "${item.label}" from recent uploads.`);
-    }
+    handleSelectSourceAsset(asset, {
+      publicId: item.publicId,
+      label: item.label,
+      historyItem: item,
+      sourceDescription: 'from recent uploads',
+    });
+  };
+
+  const handleSelectFromCloudinary = (video: CloudinarySourceVideo) => {
+    handleSelectSourceAsset(createMediaAssetFromCloudinarySourceVideo(video), {
+      publicId: video.publicId,
+      label: video.label,
+      historyItem: createUploadHistoryItemFromCloudinarySourceVideo(video),
+      sourceDescription: 'from Cloudinary uploads',
+    });
   };
 
   const handleSourceUploadError = (error: Error) => {
@@ -1507,6 +1593,75 @@ export function Feature1Page({ session }: Feature1PageProps) {
                           {sourceAsset.duration ? `${Math.round(sourceAsset.duration)}s` : 'Loaded'}
                         </span>
                       </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="recent-uploads">
+                  <div className="asset-library__header">
+                    <div>
+                      <h4 className="recent-uploads__title">Uploaded Shorty Videos</h4>
+                      <p className="asset-library__caption">
+                        Pulled from Cloudinary `video/upload` assets and filtered down to direct source uploads.
+                      </p>
+                    </div>
+                    <button
+                      className="btn btn--ghost btn--sm"
+                      type="button"
+                      onClick={() => void loadCloudinarySourceVideos()}
+                      disabled={isLoadingCloudinarySourceVideos}
+                    >
+                      {isLoadingCloudinarySourceVideos ? 'Refreshing…' : 'Refresh'}
+                    </button>
+                  </div>
+
+                  {cloudinarySourceVideosError ? (
+                    <div className="asset-library__state asset-library__state--error">
+                      {cloudinarySourceVideosError}
+                    </div>
+                  ) : null}
+
+                  {!cloudinarySourceVideosError && isLoadingCloudinarySourceVideos && cloudinarySourceVideos.length === 0 ? (
+                    <div className="asset-library__state">Loading uploaded Cloudinary videos…</div>
+                  ) : null}
+
+                  {!cloudinarySourceVideosError &&
+                  !isLoadingCloudinarySourceVideos &&
+                  cloudinarySourceVideos.length === 0 ? (
+                    <div className="asset-library__state">
+                      No uploaded Shorty source videos were found in Cloudinary yet.
+                    </div>
+                  ) : null}
+
+                  {cloudinarySourceVideos.length > 0 && (
+                    <div className="recent-uploads__grid">
+                      {cloudinarySourceVideos.map((video) => (
+                        <button
+                          key={video.publicId}
+                          type="button"
+                          className={`recent-uploads__card ${sourceAsset?.publicId === video.publicId ? 'recent-uploads__card--active' : ''}`}
+                          onClick={() => handleSelectFromCloudinary(video)}
+                          data-testid="cloudinary-source-card"
+                        >
+                          {video.thumbnailUrl ? (
+                            <img
+                              src={video.thumbnailUrl}
+                              alt={video.label}
+                              className="recent-uploads__thumb"
+                            />
+                          ) : (
+                            <div className="recent-uploads__thumb recent-uploads__thumb--placeholder">
+                              🎬
+                            </div>
+                          )}
+                          <div className="recent-uploads__info">
+                            <span className="recent-uploads__label">{video.label}</span>
+                            <span className="recent-uploads__meta">
+                              {video.duration ? `${Math.round(video.duration)}s` : 'Video'} • Cloudinary
+                            </span>
+                          </div>
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>
