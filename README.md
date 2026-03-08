@@ -5,7 +5,7 @@ Shorty turns long videos into short-form content.
 Current product scope:
 - Feature 1: turn existing videos into ranked reels
 - Feature 2: brain rot AI reels
-- Shared agent layer: Gemini-planned workflow mutations on both feature canvases
+- Shared agent layer: OpenRouter-planned workflow mutations on both feature canvases
 - Base requirements: login, past work, upload, download
 
 ## Current status
@@ -79,7 +79,7 @@ Both feature pages now expose a shared right-sidebar agent layer.
 
 Architecture:
 - frontend adapters translate each page’s existing graph state into a shared workflow graph
-- `POST /api/agent-command` runs retrieval, Gemini planning, validation, candidate scoring, and bounded selection
+- `POST /api/agent-command` runs retrieval, OpenRouter planning, validation, candidate scoring, and bounded selection
 - validated graph actions compile back into each page’s existing local state
 - auto-run uses the same existing handlers already used by the manual UI
 
@@ -190,13 +190,13 @@ Optional server-side Supabase config:
 
 If browser auth works already, these can stay as-is.
 
-#### Gemini workflow agent
+#### OpenRouter workflow agent
 Required for the new shared agent layer:
-- `GEMINI_API_KEY`
+- `OPENROUTER_API_KEY`
 
 Optional overrides:
-- `GEMINI_AGENT_MODEL` defaults to `gemini-3.1-flash-lite`
-- `GEMINI_EMBEDDING_MODEL` defaults to `gemini-embedding-001`
+- `OPENROUTER_AGENT_MODEL` defaults to `openai/gpt-5.4`
+- `OPENROUTER_EMBEDDING_MODEL` defaults to `text-embedding-3-small`
 - `VITE_ENABLE_WORKFLOW_AGENT` defaults to enabled unless set to `false`
 
 Notes:

@@ -27,10 +27,11 @@ export default function handler(_req, res) {
       model: process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1',
     },
     brainrot: {
+      hasOpenRouterKey: Boolean(process.env.OPENROUTER_API_KEY),
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
       geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
-      agentModel: process.env.GEMINI_AGENT_MODEL || 'gemini-3.1-flash-lite',
-      embeddingModel: process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001',
+      agentModel: process.env.OPENROUTER_AGENT_MODEL || 'openai/gpt-5.4',
+      embeddingModel: process.env.OPENROUTER_EMBEDDING_MODEL || 'text-embedding-3-small',
       hasElevenLabsKey: Boolean(process.env.ELEVENLABS_API_KEY),
       elevenLabsModel: process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2',
     },
