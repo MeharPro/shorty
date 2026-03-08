@@ -773,6 +773,26 @@ function buildTypeLabel(typeId: BrainrotTypeId) {
   return BRAINROT_TYPE_PRESETS.find((preset) => preset.id === typeId)?.label ?? 'Brain Rot';
 }
 
+function looksLikeBrainrotPromptLeak(value: string) {
+  const normalized = value.replace(/\s+/g, ' ').trim().toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  const markers = [
+    'start with the main idea:',
+    'give the setup in one clean line',
+    'move straight into the tension',
+    'name the part people usually miss',
+    'keep the pacing tight',
+    'finish with one direct line',
+    'if there is a pattern, spell it out',
+  ];
+
+  return markers.filter((marker) => normalized.includes(marker)).length >= 2;
+}
+
 async function readJsonResponse<T>(response: Response): Promise<T> {
   const raw = await response.text();
   const parsed = raw ? (JSON.parse(raw) as T & { error?: string }) : ({} as T & { error?: string });
@@ -965,7 +985,18 @@ export async function generateBrainrotScript(input: {
     body: JSON.stringify(input),
   });
 
-  return readJsonResponse<BrainrotScriptResponse>(response);
+  const data = await readJsonResponse<BrainrotScriptResponse>(response);
+  const spokenScript = data.script?.spokenScript?.trim() || '';
+
+  if (!spokenScript) {
+    throw new Error('Gemini returned an empty spoken script.');
+  }
+
+  if (looksLikeBrainrotPromptLeak(spokenScript)) {
+    throw new Error('Gemini returned prompt instructions instead of a spoken script.');
+  }
+
+  return data;
 }
 
 export async function enhanceBrainrotPrompt(input: {

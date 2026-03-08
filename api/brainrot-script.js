@@ -190,55 +190,15 @@ function estimateWordRange(targetDurationSeconds) {
   };
 }
 
-function normalizePromptIdea(prompt) {
-  return cleanSentence(prompt, 'the topic').replace(/[?!.]+$/g, '').trim() || 'the topic';
-}
-
-function buildFallbackSpokenScript(prompt, type, targetDurationSeconds, variationIndex = 1) {
-  const idea = normalizePromptIdea(prompt);
-  const typeDescription = cleanSentence(type?.description, 'Make it feel fast, sticky, and direct.');
-  const { minWords } = estimateWordRange(targetDurationSeconds);
-  const sentenceBank = [
-    `Start with the main idea: ${idea}.`,
-    `Give the setup in one clean line so the listener immediately understands what the reel is about.`,
-    `Move straight into the tension, conflict, or question that makes the topic worth paying attention to.`,
-    `Name the part people usually miss and explain why it matters in plain language.`,
-    `Keep the pacing tight so every sentence adds one new beat instead of circling the same point.`,
-    `${typeDescription}`,
-    `Land the consequence, payoff, or reframe clearly enough that the ending feels earned.`,
-    `Finish with one direct line that makes the audience want to replay the idea or argue with it.`,
-    `If there is a pattern, spell it out instead of hinting at it vaguely.`,
-    `If there is a decision, cost, or tradeoff, end on that because it gives the reel a real conclusion.`,
-  ];
-  const assembled = [];
-  let wordCount = 0;
-  let cursor = Math.max(0, variationIndex - 1);
-
-  while (wordCount < minWords) {
-    const nextSentence = sentenceBank[cursor % sentenceBank.length];
-    assembled.push(nextSentence);
-    wordCount = assembled.join(' ').split(' ').filter(Boolean).length;
-    cursor += 1;
-  }
-
-  return assembled.join(' ');
-}
-
-function fallbackScriptPackage(prompt, type, targetDurationSeconds, options = {}) {
+function buildScriptPackageDefaults(prompt, type) {
   const typeLabel = type?.label || 'Brain Rot';
-  const spokenScript = buildFallbackSpokenScript(
-    prompt,
-    type,
-    targetDurationSeconds,
-    clamp(options.variationIndex, 1, 12, 1)
-  );
   const introCardQuestion = deriveIntroCardQuestion(prompt);
 
   return {
     title: `${typeLabel} Breakdown`,
     hook: 'This gets weird fast',
-    spokenScript,
-    captionText: deriveCaption(spokenScript),
+    spokenScript: '',
+    captionText: '',
     introCardTitle: deriveIntroCardTitle(prompt, type),
     introCardQuestion,
     visualNotes: [
@@ -264,6 +224,27 @@ function parseGeminiText(payload) {
   } catch {
     return null;
   }
+}
+
+function looksLikePromptInstructions(value) {
+  const normalized = cleanSentence(value, '').toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  const markers = [
+    'start with the main idea:',
+    'give the setup in one clean line',
+    'move straight into the tension',
+    'name the part people usually miss',
+    'keep the pacing tight',
+    'land the consequence, payoff, or reframe',
+    'finish with one direct line',
+    'if there is a pattern, spell it out',
+  ];
+
+  return markers.filter((marker) => normalized.includes(marker)).length >= 2;
 }
 
 export default async function handler(req, res) {
@@ -307,13 +288,8 @@ export default async function handler(req, res) {
   }
 
   if (!apiKey) {
-    res.status(200).json({
-      model,
-      brainrotType: typeId,
-      script: fallbackScriptPackage(prompt, type, targetDurationSeconds, { variationIndex }),
-      generatedAt: new Date().toISOString(),
-      fallback: true,
-      warning: 'Gemini is not configured. Set GEMINI_API_KEY on the server.',
+    res.status(503).json({
+      error: 'Gemini is not configured. Set GEMINI_API_KEY on the server.',
     });
     return;
   }
@@ -411,22 +387,41 @@ export default async function handler(req, res) {
       throw new Error(payload.error?.message || 'Gemini failed to generate the script.');
     }
 
-    const fallback = fallbackScriptPackage(prompt, type, targetDurationSeconds, { variationIndex });
-    const parsed = parseGeminiText(payload) || fallback;
+    const defaults = buildScriptPackageDefaults(prompt, type);
+    const parsed = parseGeminiText(payload);
+
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('Gemini returned invalid JSON for the script package.');
+    }
+
+    const spokenScript = cleanSentence(parsed.spokenScript, '');
+
+    if (!spokenScript) {
+      throw new Error('Gemini returned an empty spoken script.');
+    }
+
+    if (looksLikePromptInstructions(spokenScript)) {
+      throw new Error('Gemini returned prompt instructions instead of a spoken script.');
+    }
+
     const scriptPackage = sanitizeScriptPackage({
       title: cleanSentence(parsed.title, `${type.label} Breakdown`).slice(0, 64),
       hook: cleanSentence(parsed.hook, 'This gets weird fast').slice(0, 48),
-      spokenScript: cleanSentence(parsed.spokenScript, fallback.spokenScript),
-      captionText: cleanSentence(parsed.captionText, deriveCaption(parsed.spokenScript)).slice(0, 72),
-      introCardTitle: cleanSentence(parsed.introCardTitle, fallback.introCardTitle).slice(0, 28),
+      spokenScript,
+      captionText: cleanSentence(parsed.captionText, deriveCaption(spokenScript)).slice(0, 72),
+      introCardTitle: cleanSentence(parsed.introCardTitle, defaults.introCardTitle).slice(0, 28),
       introCardQuestion: cleanSentence(
         parsed.introCardQuestion,
-        fallback.introCardQuestion
+        defaults.introCardQuestion
       ).slice(0, 84),
       visualNotes: Array.isArray(parsed.visualNotes)
         ? parsed.visualNotes.map((item) => cleanSentence(item, '')).filter(Boolean).slice(0, 3)
-        : fallback.visualNotes,
-    }, fallback);
+        : defaults.visualNotes,
+    }, {
+      ...defaults,
+      spokenScript,
+      captionText: deriveCaption(spokenScript),
+    });
 
     res.status(200).json({
       model,
@@ -435,15 +430,8 @@ export default async function handler(req, res) {
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {
-    const fallback = fallbackScriptPackage(prompt, type, targetDurationSeconds, { variationIndex });
-
-    res.status(200).json({
-      model,
-      brainrotType: typeId,
-      script: fallback,
-      generatedAt: new Date().toISOString(),
-      fallback: true,
-      warning: error instanceof Error ? error.message : 'Gemini generation failed. Returned fallback copy.',
+    res.status(502).json({
+      error: error instanceof Error ? error.message : 'Gemini generation failed.',
     });
   }
 }
