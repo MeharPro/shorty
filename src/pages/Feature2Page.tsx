@@ -26,6 +26,7 @@ import {
   buildBrainrotCompositePosterUrl,
   buildBrainrotCompositeUrl,
   buildBrainrotRunPlan,
+  enhanceBrainrotPrompt,
   fetchBrainrotVoices,
   generateBrainrotIntroCardAsset,
   generateBrainrotNode,
@@ -159,6 +160,59 @@ const CAPTION_FONT_SIZE_MIN = 18;
 const CAPTION_FONT_SIZE_MAX = 48;
 const CAPTION_HORIZONTAL_LIMIT = 420;
 const CAPTION_VERTICAL_LIMIT = 760;
+const PROMPT_FIELD_PLACEHOLDER = 'Pick a topic, randomize one, or enhance it with AI.';
+const INTRO_QUESTION_PLACEHOLDER = 'Opening question for the intro card.';
+
+const TOPIC_PROMPT_LIBRARY: Record<BrainrotTypeId, string[]> = {
+  'subway-storytime': [
+    'Why did one harmless favor turn into a public disaster?',
+    'What tiny lie made the whole friend group implode?',
+    'Why did a normal family dinner end with someone moving out?',
+    'What happened after the wrong text got sent to everyone?',
+    'Why did one birthday gift reopen an old betrayal?',
+    'How did a casual rumor wreck somebody’s entire week?',
+  ],
+  'conspiracy-spiral': [
+    'Why does the same suspicious pattern keep showing up before a scandal breaks?',
+    'What small detail makes the official explanation feel incomplete?',
+    'Why do people keep ignoring the one clue that repeats every time?',
+    'What changed right before the story stopped making sense?',
+    'Why does the timeline look clean until you compare the missing piece?',
+    'What pattern only becomes obvious after you watch the reaction twice?',
+  ],
+  'motivation-shock': [
+    'What habit quietly wastes more years than people admit?',
+    'Why do smart people keep choosing the easier option that ruins momentum?',
+    'What belief keeps people busy but never actually moving forward?',
+    'Why does chasing comfort usually create the exact life people fear?',
+    'What decision instantly separates disciplined people from everyone else?',
+    'Why does waiting to feel ready usually make things worse?',
+  ],
+  'weird-facts': [
+    'What everyday behavior is way stranger once you notice the pattern?',
+    'Why do people almost always misread this common signal?',
+    'What normal object works in a way most people completely get wrong?',
+    'Why does the brain remember awkward moments more vividly than useful ones?',
+    'What weird social rule do people follow without questioning it?',
+    'Why does one tiny design choice change how people react so fast?',
+  ],
+  'reddit-drama': [
+    'Why did the richest sibling get cut out at the last second?',
+    'What wedding speech exposed the lie nobody was supposed to hear?',
+    'Why did a parent’s favorite child become the family problem overnight?',
+    'What inheritance rule turned cousins into enemies in one weekend?',
+    'Why did one apology make the whole situation look even worse?',
+    'What secret came out right after everyone picked sides?',
+  ],
+  'money-panic': [
+    'What money mistake looks small until it starts draining every month?',
+    'Why do people feel broke even after finally earning more?',
+    'What career move sounds safe but quietly kills long-term leverage?',
+    'Why does lifestyle creep hit hardest right after a pay raise?',
+    'What expense keeps people stuck longer than they realize?',
+    'Why do people confuse being busy with becoming valuable?',
+  ],
+};
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -168,6 +222,19 @@ function delay(ms: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
+}
+
+function normalizeTopicText(value: string) {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function pickRandomTopicPrompt(brainrotType: BrainrotTypeId, exclude?: string) {
+  const pool = TOPIC_PROMPT_LIBRARY[brainrotType] ?? TOPIC_PROMPT_LIBRARY['reddit-drama'];
+  const excluded = normalizeTopicText(exclude || '');
+  const candidates = pool.filter((entry) => normalizeTopicText(entry) !== excluded);
+  const targetPool = candidates.length ? candidates : pool;
+
+  return targetPool[Math.floor(Math.random() * targetPool.length)] ?? pool[0];
 }
 
 function isCoreStageId(value: string): value is BrainrotStageId {
@@ -883,17 +950,18 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const defaultCaptionPreset =
     BRAINROT_CAPTION_STYLE_PRESETS.find((preset) => preset.id === defaultTemplate.captionPresetId) ??
     BRAINROT_CAPTION_STYLE_PRESETS[0];
+  const initialTopicRef = useRef(pickRandomTopicPrompt(defaultTemplate.typeId));
   const [selectedTemplateId, setSelectedTemplateId] = useState<BrainrotTemplateId>(
     defaultTemplate.id
   );
   const [brainrotType, setBrainrotType] = useState<BrainrotTypeId>(defaultTemplate.typeId);
   const [targetDurationSeconds, setTargetDurationSeconds] = useState(DEFAULT_TARGET_DURATION);
-  const [promptInput, setPromptInput] = useState(defaultTemplate.defaultPrompt);
+  const [promptInput, setPromptInput] = useState(initialTopicRef.current);
   const [scriptGuidance, setScriptGuidance] = useState(defaultTemplate.defaultScriptGuidance);
   const [scriptDraft, setScriptDraft] = useState('');
   const [manualScriptMode, setManualScriptMode] = useState(false);
   const [lastGeneratedScript, setLastGeneratedScript] = useState<BrainrotScriptPackage | null>(null);
-  const [captionText, setCaptionText] = useState(defaultTemplate.defaultIntroQuestion);
+  const [captionText, setCaptionText] = useState(initialTopicRef.current);
   const [manualCaptionMode, setManualCaptionMode] = useState(false);
   const [selectedCaptionPresetId, setSelectedCaptionPresetId] =
     useState<BrainrotCaptionPresetId>(defaultTemplate.captionPresetId);
@@ -902,7 +970,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const [introCard, setIntroCard] = useState<BrainrotIntroCard>({
     enabled: true,
     title: 'Story Watch',
-    question: defaultTemplate.defaultIntroQuestion,
+    question: initialTopicRef.current,
     durationSeconds: INTRO_CARD_DURATION_SECONDS,
   });
   const [isIntroCardTitleManual, setIsIntroCardTitleManual] = useState(false);
@@ -957,6 +1025,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const [isNodeEditorOpen, setIsNodeEditorOpen] = useState(false);
   const [runPromptDraft, setRunPromptDraft] = useState(promptInput);
   const [runScriptGuidanceDraft, setRunScriptGuidanceDraft] = useState(scriptGuidance);
+  const [isEnhancingPrompt, setIsEnhancingPrompt] = useState(false);
   const [runBatchSettingsDraft, setRunBatchSettingsDraft] =
     useState<BrainrotBatchSettings>(DEFAULT_BATCH_SETTINGS);
   const [aiNodePrompt, setAiNodePrompt] = useState('');
@@ -1156,6 +1225,59 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const activeVoiceAsset = generatedRender?.audioAsset ?? voiceAsset;
   const activeSubtitleAsset = generatedRender?.subtitleAsset ?? subtitleAsset;
 
+  const setTopicPromptValue = useCallback(
+    (
+      nextPrompt: string,
+      options?: {
+        syncRunDraft?: boolean;
+      }
+    ) => {
+      const cleaned = nextPrompt.replace(/\s+/g, ' ').trim();
+      setPromptInput(cleaned);
+      if (options?.syncRunDraft) {
+        setRunPromptDraft(cleaned);
+      }
+      if (!isIntroCardQuestionManual) {
+        setIntroCard((current) => ({
+          ...current,
+          question: cleaned || current.question,
+        }));
+      }
+      if (!manualScriptMode) {
+        setScriptDraft('');
+        setLastGeneratedScript(null);
+      }
+    },
+    [isIntroCardQuestionManual, manualScriptMode]
+  );
+
+  const setScriptGuidanceValue = useCallback(
+    (
+      nextGuidance: string,
+      options?: {
+        syncRunDraft?: boolean;
+      }
+    ) => {
+      const cleaned = nextGuidance.replace(/\s+/g, ' ').trim();
+      setScriptGuidance(cleaned);
+      if (options?.syncRunDraft) {
+        setRunScriptGuidanceDraft(cleaned);
+      }
+    },
+    []
+  );
+
+  const shouldAutoSeedTopic = useCallback(
+    (value: string) => {
+      const normalized = normalizeTopicText(value);
+      return (
+        !normalized ||
+        normalized === normalizeTopicText(selectedTemplate.defaultPrompt)
+      );
+    },
+    [selectedTemplate.defaultPrompt]
+  );
+
   useEffect(() => {
     let isMounted = true;
     const localHistory = loadBrainrotHistory(sessionUserKey);
@@ -1180,6 +1302,15 @@ export function Feature2Page({ session }: Feature2PageProps) {
       isMounted = false;
     };
   }, [session?.userId, sessionUserKey]);
+
+  useEffect(() => {
+    if (!isRunDialogOpen) {
+      return;
+    }
+
+    setRunPromptDraft(promptInput);
+    setRunScriptGuidanceDraft(scriptGuidance);
+  }, [isRunDialogOpen, promptInput, scriptGuidance]);
 
   useEffect(() => {
     const node = canvasStageRef.current;
@@ -1915,12 +2046,13 @@ export function Feature2Page({ session }: Feature2PageProps) {
       BRAINROT_GAMEPLAY_PRESETS[0];
     const nextVoiceFilterMode =
       template.preferredVoiceGender === 'female' ? 'expressive-female' : 'expressive-male';
+    const nextTopicPrompt = pickRandomTopicPrompt(template.typeId, promptInput);
 
     setSelectedTemplateId(template.id);
     setBrainrotType(template.typeId);
-    setPromptInput(template.defaultPrompt);
-    setScriptGuidance(template.defaultScriptGuidance);
-    setCaptionText(template.defaultIntroQuestion);
+    setTopicPromptValue(nextTopicPrompt);
+    setScriptGuidanceValue(template.defaultScriptGuidance);
+    setCaptionText(nextTopicPrompt);
     setManualScriptMode(false);
     setScriptDraft('');
     setLastGeneratedScript(null);
@@ -1936,7 +2068,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
     setIntroCard({
       enabled: true,
       title: 'Story Watch',
-      question: template.defaultIntroQuestion,
+      question: nextTopicPrompt,
       durationSeconds: INTRO_CARD_DURATION_SECONDS,
     });
     setIsIntroCardTitleManual(false);
@@ -2130,13 +2262,70 @@ export function Feature2Page({ session }: Feature2PageProps) {
     appendLog('Caption layout reset to the default stage position.', 'info');
   };
 
+  const handleRandomizeRunTopic = () => {
+    const nextPrompt = pickRandomTopicPrompt(brainrotType, runPromptDraft || promptInput);
+    setTopicPromptValue(nextPrompt, { syncRunDraft: true });
+    setStatusMessage('Topic prompt randomized from the curated topic list.');
+    appendLog(`Topic prompt randomized to "${nextPrompt}".`, 'success');
+  };
+
+  const handleEnhanceRunPrompt = async () => {
+    const basePrompt = runPromptDraft.trim() || promptInput.trim();
+
+    if (!basePrompt) {
+      setStatusMessage('Randomize or enter a topic prompt before using AI enhancement.');
+      appendLog('AI prompt enhancement blocked because the topic prompt is empty.', 'error');
+      return;
+    }
+
+    setIsEnhancingPrompt(true);
+    setStatusMessage('Enhancing the topic prompt with Gemini.');
+    appendLog('Sending the current prompt, guidance, and latest script to Gemini for refinement.', 'info');
+
+    try {
+      const response = await enhanceBrainrotPrompt({
+        prompt: basePrompt,
+        brainrotType,
+        scriptGuidance: runScriptGuidanceDraft || scriptGuidance,
+        previousScript: activeScript?.spokenScript || scriptDraft,
+        previousPrompt: savedRuns[0]?.prompt || promptInput,
+        templateId: selectedTemplateId,
+      });
+
+      setTopicPromptValue(response.prompt, { syncRunDraft: true });
+      setScriptGuidanceValue(response.scriptGuidance, { syncRunDraft: true });
+      setStatusMessage('Gemini enhanced the topic prompt and refreshed the script guidance.');
+      appendLog('Gemini prompt enhancement applied to the current topic and guidance.', 'success');
+
+      if (response.warning) {
+        appendLog(response.warning, 'warn');
+      }
+    } catch (error) {
+      const nextMessage =
+        error instanceof Error ? error.message : 'Failed to enhance the topic prompt.';
+      setStatusMessage(nextMessage);
+      appendLog(nextMessage, 'error');
+    } finally {
+      setIsEnhancingPrompt(false);
+    }
+  };
+
   const openRunDialog = () => {
     if (renderState === 'running') {
       return;
     }
 
     setIsNodeEditorOpen(false);
-    setRunPromptDraft(promptInput);
+    const nextPrompt = shouldAutoSeedTopic(promptInput)
+      ? pickRandomTopicPrompt(brainrotType, promptInput)
+      : promptInput;
+
+    if (nextPrompt !== promptInput) {
+      setTopicPromptValue(nextPrompt, { syncRunDraft: true });
+    } else {
+      setRunPromptDraft(promptInput);
+    }
+
     setRunScriptGuidanceDraft(scriptGuidance);
     setRunBatchSettingsDraft(batchSettings);
     setIsRunDialogOpen(true);
@@ -2664,6 +2853,9 @@ export function Feature2Page({ session }: Feature2PageProps) {
         promptInput,
         scriptGuidance,
         captionText,
+        activeScriptText: activeScript?.spokenScript || scriptDraft,
+        activeScriptTitle: activeScript?.title || '',
+        lastRunPrompt: savedRuns[0]?.prompt || '',
         targetDurationSeconds,
         selectedVoiceId,
         selectedGameplayPresetId,
@@ -2675,8 +2867,12 @@ export function Feature2Page({ session }: Feature2PageProps) {
       canvasNodes,
       captionText,
       coreFlowModels,
+      activeScript?.spokenScript,
+      activeScript?.title,
       promptInput,
       renderState,
+      savedRuns,
+      scriptDraft,
       scriptGuidance,
       selectedGameplayPresetId,
       selectedNode,
@@ -3303,7 +3499,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                         question: event.target.value,
                       }));
                     }}
-                    placeholder="What family tradition ruined your family?"
+                    placeholder={INTRO_QUESTION_PLACEHOLDER}
                   />
                 </label>
                 <div className="brainrot-mini-grid">
@@ -3369,21 +3565,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   <textarea
                     rows={6}
                     value={promptInput}
-                    onChange={(event) => {
-                      setPromptInput(event.target.value);
-                      setIntroCard((current) => ({
-                        ...current,
-                        question:
-                          current.question === selectedTemplate.defaultIntroQuestion
-                            ? event.target.value
-                            : current.question,
-                      }));
-                      if (!manualScriptMode) {
-                        setScriptDraft('');
-                        setLastGeneratedScript(null);
-                      }
-                    }}
-                    placeholder="What family tradition ruined your family?"
+                    onChange={(event) => setTopicPromptValue(event.target.value)}
+                    placeholder={PROMPT_FIELD_PLACEHOLDER}
                   />
                 </label>
                 <label className="form-field">
@@ -3391,7 +3574,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   <textarea
                     rows={4}
                     value={scriptGuidance}
-                    onChange={(event) => setScriptGuidance(event.target.value)}
+                    onChange={(event) => setScriptGuidanceValue(event.target.value)}
                     placeholder="Tell Gemini what angle to push, what tone to use, or what to avoid."
                   />
                 </label>
@@ -4583,17 +4766,39 @@ export function Feature2Page({ session }: Feature2PageProps) {
                 <textarea
                   rows={5}
                   value={runPromptDraft}
-                  onChange={(event) => setRunPromptDraft(event.target.value)}
-                  placeholder="Describe the topic, claim, or story beat the reel should cover."
+                  onChange={(event) =>
+                    setTopicPromptValue(event.target.value, {
+                      syncRunDraft: true,
+                    })
+                  }
+                  placeholder={PROMPT_FIELD_PLACEHOLDER}
                 />
               </label>
+
+              <div className="brainrot-action-row">
+                <button className="btn btn--ghost" type="button" onClick={handleRandomizeRunTopic}>
+                  Randomize topic
+                </button>
+                <button
+                  className="btn btn--ghost"
+                  type="button"
+                  onClick={() => void handleEnhanceRunPrompt()}
+                  disabled={isEnhancingPrompt}
+                >
+                  {isEnhancingPrompt ? 'Enhancing...' : 'Enhance with AI'}
+                </button>
+              </div>
 
               <label className="form-field">
                 <span>Script guidance</span>
                 <textarea
                   rows={4}
                   value={runScriptGuidanceDraft}
-                  onChange={(event) => setRunScriptGuidanceDraft(event.target.value)}
+                  onChange={(event) =>
+                    setScriptGuidanceValue(event.target.value, {
+                      syncRunDraft: true,
+                    })
+                  }
                   placeholder="Tell Gemini how to pace the narration, what tone to hit, and what to avoid."
                 />
               </label>

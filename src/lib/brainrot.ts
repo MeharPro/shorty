@@ -204,6 +204,15 @@ export interface BrainrotScriptResponse {
   warning?: string;
 }
 
+export interface BrainrotPromptEnhancementResponse {
+  model: string;
+  prompt: string;
+  scriptGuidance: string;
+  generatedAt: string;
+  fallback?: boolean;
+  warning?: string;
+}
+
 export interface BrainrotVoiceResponse {
   audioAsset: BrainrotAudioAsset;
   durationSeconds: number;
@@ -290,8 +299,8 @@ export const BRAINROT_TEMPLATE_PRESETS: BrainrotTemplatePreset[] = [
     typeId: 'reddit-drama',
     captionPresetId: 'reddit-story',
     preferredVoiceGender: 'female',
-    defaultPrompt: 'What family tradition ruined your family?',
-    defaultIntroQuestion: 'What family tradition ruined your family?',
+    defaultPrompt: 'Pick a high-tension story topic.',
+    defaultIntroQuestion: 'What happened next?',
     defaultScriptGuidance:
       'Open with a strong question, then turn it into a gripping confession-style story with a female creator delivery. Keep the phrasing easy to caption in short 2 to 4 word bursts.',
   },
@@ -304,8 +313,8 @@ export const BRAINROT_TEMPLATE_PRESETS: BrainrotTemplatePreset[] = [
     typeId: 'reddit-drama',
     captionPresetId: 'reddit-story',
     preferredVoiceGender: 'female',
-    defaultPrompt: 'What family tradition ruined your family?',
-    defaultIntroQuestion: 'What family tradition ruined your family?',
+    defaultPrompt: 'Pick a sticky story topic.',
+    defaultIntroQuestion: 'What happened next?',
     defaultScriptGuidance:
       'Open with a sharp question and make it sound like an addicting story recap with a female creator voice. Keep every caption chunk short, punchy, and easy to read in the center of the screen.',
   },
@@ -946,6 +955,25 @@ export async function generateBrainrotScript(input: {
   });
 
   return readJsonResponse<BrainrotScriptResponse>(response);
+}
+
+export async function enhanceBrainrotPrompt(input: {
+  prompt: string;
+  brainrotType: BrainrotTypeId;
+  scriptGuidance?: string;
+  previousScript?: string;
+  previousPrompt?: string;
+  templateId?: BrainrotTemplateId;
+}) {
+  const response = await fetch('/api/brainrot-prompt', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  });
+
+  return readJsonResponse<BrainrotPromptEnhancementResponse>(response);
 }
 
 export async function generateBrainrotCaptions(input: {

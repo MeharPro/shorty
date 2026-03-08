@@ -25,6 +25,9 @@ interface Feature2WorkflowSnapshot {
   promptInput: string;
   scriptGuidance: string;
   captionText: string;
+  activeScriptText?: string;
+  activeScriptTitle?: string;
+  lastRunPrompt?: string;
   targetDurationSeconds: number;
   selectedVoiceId: string;
   selectedGameplayPresetId: string;
@@ -33,6 +36,15 @@ interface Feature2WorkflowSnapshot {
 }
 
 const CORE_SEQUENCE = ['prompt', 'script', 'voice', 'gameplay', 'caption', 'music', 'render'];
+
+function truncateText(value: string | undefined, maxLength: number) {
+  const trimmed = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength - 1)}…` : trimmed;
+}
 
 export function buildFeature2WorkflowGraph(
   snapshot: Feature2WorkflowSnapshot
@@ -55,6 +67,33 @@ export function buildFeature2WorkflowGraph(
           position: { x: node.x, y: node.y },
           params: {
             code: stage?.code || '',
+            ...(node.id === 'prompt'
+              ? {
+                  promptInput: truncateText(snapshot.promptInput, 220),
+                }
+              : {}),
+            ...(node.id === 'script'
+              ? {
+                  scriptGuidance: truncateText(snapshot.scriptGuidance, 260),
+                  activeScriptTitle: truncateText(snapshot.activeScriptTitle, 80),
+                  activeScriptText: truncateText(snapshot.activeScriptText, 520),
+                }
+              : {}),
+            ...(node.id === 'caption'
+              ? {
+                  captionText: truncateText(snapshot.captionText, 120),
+                }
+              : {}),
+            ...(node.id === 'voice'
+              ? {
+                  selectedVoiceId: snapshot.selectedVoiceId,
+                }
+              : {}),
+            ...(node.id === 'gameplay'
+              ? {
+                  selectedGameplayPresetId: snapshot.selectedGameplayPresetId,
+                }
+              : {}),
           },
           metadata: {},
         }
@@ -93,6 +132,9 @@ export function buildFeature2WorkflowGraph(
       promptInput: snapshot.promptInput,
       scriptGuidance: snapshot.scriptGuidance,
       captionText: snapshot.captionText,
+      activeScriptTitle: truncateText(snapshot.activeScriptTitle, 80),
+      activeScriptText: truncateText(snapshot.activeScriptText, 900),
+      lastRunPrompt: truncateText(snapshot.lastRunPrompt, 220),
       targetDurationSeconds: snapshot.targetDurationSeconds,
       selectedVoiceId: snapshot.selectedVoiceId,
       selectedGameplayPresetId: snapshot.selectedGameplayPresetId,

@@ -48,6 +48,8 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
     return <Navigate replace to="/login" />;
   }
 
+  const accountLabel = session.username.includes('@') ? session.username : `@${session.username}`;
+
   const handleLogout = async () => {
     setIsLoggingOut(true);
     try {
@@ -70,7 +72,7 @@ export function DashboardPage({ session, onLogout }: DashboardPageProps) {
         <div className="dashboard__user-area">
           <div className="dashboard__user-info">
             <strong>{session.name}</strong>
-            <span>@{session.username}</span>
+            <span>{accountLabel}</span>
           </div>
           <button
             className="dashboard__logout"

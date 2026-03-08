@@ -49,10 +49,15 @@ export function onSessionChange(callback: (session: Session | null) => void): ()
   };
 }
 
+type EmailAuthResult =
+  | { ok: true; session: Session | null }
+  | { ok: false; message: string };
+
 export async function signUpWithEmail(
   email: string,
-  password: string
-): Promise<{ ok: true } | { ok: false; message: string }> {
+  password: string,
+  displayName?: string
+): Promise<EmailAuthResult> {
   if (!supabase) {
     return {
       ok: false,
@@ -60,9 +65,18 @@ export async function signUpWithEmail(
     };
   }
 
-  const { error } = await supabase.auth.signUp({
-    email,
+  const trimmedDisplayName = displayName?.trim();
+  const { data, error } = await supabase.auth.signUp({
+    email: email.trim(),
     password,
+    options: trimmedDisplayName
+      ? {
+          data: {
+            display_name: trimmedDisplayName,
+            name: trimmedDisplayName,
+          },
+        }
+      : undefined,
   });
 
   if (error) {
@@ -72,13 +86,16 @@ export async function signUpWithEmail(
     };
   }
 
-  return { ok: true };
+  return {
+    ok: true,
+    session: data.session,
+  };
 }
 
 export async function signInWithEmail(
   email: string,
   password: string
-): Promise<{ ok: true } | { ok: false; message: string }> {
+): Promise<EmailAuthResult> {
   if (!supabase) {
     return {
       ok: false,
@@ -86,8 +103,8 @@ export async function signInWithEmail(
     };
   }
 
-  const { error } = await supabase.auth.signInWithPassword({
-    email,
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: email.trim(),
     password,
   });
 
@@ -98,7 +115,10 @@ export async function signInWithEmail(
     };
   }
 
-  return { ok: true };
+  return {
+    ok: true,
+    session: data.session,
+  };
 }
 
 export async function signOutCurrentUser(): Promise<{ ok: true } | { ok: false; message: string }> {

@@ -7,10 +7,17 @@ import { Feature2Page } from './pages/Feature2Page';
 import { LandingPage } from './pages/LandingPage';
 import {
   clearSession,
+  createShortySessionFromAuthUser,
   loadSession,
   saveSession,
   type ShortySession,
 } from './lib/session';
+import {
+  getCurrentSession,
+  hasSupabaseBrowserConfig,
+  onSessionChange,
+  signOutCurrentUser,
+} from './lib/supabase';
 import './App.css';
 
 type ThemeMode = 'light' | 'dark';
@@ -31,7 +38,10 @@ function loadThemePreference(): ThemeMode {
 }
 
 function App() {
-  const [session, setSession] = useState<ShortySession | null>(() => loadSession());
+  const [session, setSession] = useState<ShortySession | null>(() =>
+    hasSupabaseBrowserConfig ? null : loadSession()
+  );
+  const [isAuthReady, setIsAuthReady] = useState<boolean>(() => !hasSupabaseBrowserConfig);
   const [theme, setTheme] = useState<ThemeMode>(() => loadThemePreference());
 
   const handleAuth = (nextSession: ShortySession) => {
@@ -40,6 +50,10 @@ function App() {
   };
 
   const handleLogout = async () => {
+    if (hasSupabaseBrowserConfig) {
+      await signOutCurrentUser();
+    }
+
     clearSession();
     setSession(null);
   };
@@ -50,7 +64,82 @@ function App() {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
+  useEffect(() => {
+    if (!hasSupabaseBrowserConfig) {
+      return;
+    }
+
+    let isMounted = true;
+
+    const syncSession = async () => {
+      const currentAuthSession = await getCurrentSession();
+      if (!isMounted) {
+        return;
+      }
+
+      if (currentAuthSession?.user) {
+        const nextSession = createShortySessionFromAuthUser(currentAuthSession.user);
+        saveSession(nextSession);
+        setSession(nextSession);
+      } else {
+        clearSession();
+        setSession(null);
+      }
+
+      setIsAuthReady(true);
+    };
+
+    void syncSession();
+
+    const unsubscribe = onSessionChange((currentAuthSession) => {
+      if (!isMounted) {
+        return;
+      }
+
+      if (currentAuthSession?.user) {
+        const nextSession = createShortySessionFromAuthUser(currentAuthSession.user);
+        saveSession(nextSession);
+        setSession(nextSession);
+      } else {
+        clearSession();
+        setSession(null);
+      }
+
+      setIsAuthReady(true);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
   const nextTheme = theme === 'dark' ? 'light' : 'dark';
+
+  if (!isAuthReady) {
+    return (
+      <div className="app-shell">
+        <button
+          aria-label={`Switch to ${nextTheme} mode`}
+          className="app-theme-toggle"
+          onClick={() => setTheme(nextTheme)}
+          type="button"
+        >
+          <span className="app-theme-toggle__eyebrow">Theme</span>
+          <strong className="app-theme-toggle__value">{theme === 'dark' ? 'Dark' : 'Light'}</strong>
+        </button>
+
+        <div className="auth-page">
+          <div className="auth-card">
+            <h1 className="auth-card__title">Restoring session</h1>
+            <p className="auth-card__subtitle">
+              Checking the persisted Supabase session for this browser.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">

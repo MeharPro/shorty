@@ -1,11 +1,16 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import boltLogo from '../assets/bolt-logo.png';
+import { createShortySessionFromAuthUser, type ShortySession } from '../lib/session';
+import {
+  hasSupabaseBrowserConfig,
+  signInWithEmail,
+  signUpWithEmail,
+} from '../lib/supabase';
 import {
   signInWithUsername,
   signUpWithUsername,
 } from '../lib/localAuth';
-import type { ShortySession } from '../lib/session';
 
 interface AuthPageProps {
   mode: 'login' | 'signup';
@@ -15,21 +20,27 @@ interface AuthPageProps {
 export function AuthPage({ mode, onAuth }: AuthPageProps) {
   const navigate = useNavigate();
   const [displayName, setDisplayName] = useState('');
-  const [username, setUsername] = useState('');
+  const [identity, setIdentity] = useState('');
   const [password, setPassword] = useState('');
   const [authMessage, setAuthMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isSignup = mode === 'signup';
+  const usesSupabase = hasSupabaseBrowserConfig;
+  const identityLabel = usesSupabase ? 'Email' : 'Username';
+  const identityPlaceholder = usesSupabase ? 'you@example.com' : 'creator_name';
+  const missingCredentialsMessage = usesSupabase
+    ? 'Email and password are required.'
+    : 'Username and password are required.';
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const trimmedUsername = username.trim();
+    const trimmedIdentity = identity.trim();
     const trimmedPassword = password.trim();
 
-    if (!trimmedUsername || !trimmedPassword) {
-      setAuthMessage('Username and password are required.');
+    if (!trimmedIdentity || !trimmedPassword) {
+      setAuthMessage(missingCredentialsMessage);
       return;
     }
 
@@ -37,9 +48,35 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
     setAuthMessage('');
 
     try {
+      if (usesSupabase) {
+        const result = isSignup
+          ? await signUpWithEmail(trimmedIdentity, trimmedPassword, displayName)
+          : await signInWithEmail(trimmedIdentity, trimmedPassword);
+
+        if (!result.ok) {
+          setAuthMessage(result.message);
+          return;
+        }
+
+        setPassword('');
+
+        if (!result.session?.user) {
+          setAuthMessage(
+            isSignup
+              ? 'Account created. Check your email for the confirmation link, then sign in.'
+              : 'Supabase did not return an active session. Try signing in again.'
+          );
+          return;
+        }
+
+        onAuth(createShortySessionFromAuthUser(result.session.user));
+        navigate('/app');
+        return;
+      }
+
       const result = isSignup
-        ? await signUpWithUsername(trimmedUsername, trimmedPassword, displayName)
-        : await signInWithUsername(trimmedUsername, trimmedPassword);
+        ? await signUpWithUsername(trimmedIdentity, trimmedPassword, displayName)
+        : await signInWithUsername(trimmedIdentity, trimmedPassword);
 
       if (!result.ok) {
         setAuthMessage(result.message);
@@ -71,9 +108,13 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
           {isSignup ? 'Create your account' : 'Welcome back'}
         </h1>
         <p className="auth-card__subtitle">
-          {isSignup
-            ? 'Use a username and password to create a local Shorty workspace.'
-            : 'Sign in with your username to open your saved Shorty workspace.'}
+          {usesSupabase
+            ? isSignup
+              ? 'Create an account with your email and password. Your workspace syncs through Supabase.'
+              : 'Sign in with your email to open your Supabase-backed Shorty workspace.'
+            : isSignup
+              ? 'Supabase browser auth is not configured here, so signup uses a local browser workspace.'
+              : 'Supabase browser auth is not configured here, so signin uses a local browser workspace.'}
         </p>
 
         <form className="auth-form" onSubmit={handleSubmit}>
@@ -90,21 +131,24 @@ export function AuthPage({ mode, onAuth }: AuthPageProps) {
           ) : null}
 
           <label className="auth-field">
-            <span>Username</span>
+            <span>{identityLabel}</span>
             <input
               autoCapitalize="none"
               autoCorrect="off"
-              data-testid="auth-username"
-              placeholder="creator_name"
+              autoComplete={usesSupabase ? 'email' : 'username'}
+              data-testid={usesSupabase ? 'auth-email' : 'auth-username'}
+              placeholder={identityPlaceholder}
               required
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
+              type={usesSupabase ? 'email' : 'text'}
+              value={identity}
+              onChange={(event) => setIdentity(event.target.value)}
             />
           </label>
 
           <label className="auth-field">
             <span>Password</span>
             <input
+              autoComplete={isSignup ? 'new-password' : 'current-password'}
               data-testid="auth-password"
               placeholder="Enter your password"
               required
