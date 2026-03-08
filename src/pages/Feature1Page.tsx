@@ -129,6 +129,8 @@ const GENERATE_STAGES = [
   { label: 'Ranking by virality…', duration: 600 },
 ];
 
+const FEATURE1_VIDEO_UPLOAD_FORMATS = ['mp4', 'mov', 'm4v', 'webm'];
+
 const INITIAL_CORE_NODES: CoreFlowNode[] = [
   { id: 'upload', label: 'Upload', icon: '📤', description: 'Add source video', x: 80, y: 120 },
   { id: 'transcribe', label: 'Transcribe', icon: '📝', description: 'Extract transcript', x: 360, y: 120 },
@@ -318,6 +320,7 @@ function connectorPath(
 }
 
 export function Feature1Page({ session }: Feature1PageProps) {
+  const sessionUserKey = session?.userKey;
   const [activeCoreNode, setActiveCoreNode] = useState<CoreNodeId>('upload');
   const [coreNodes, setCoreNodes] = useState<CoreFlowNode[]>(INITIAL_CORE_NODES);
   const [logicBlocks, setLogicBlocks] = useState<LogicBlock[]>(() => createInitialLogicBlocks());
@@ -380,7 +383,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
     }
 
     let isMounted = true;
-    const localHistory = loadReelHistory(session.email);
+    const localHistory = loadReelHistory(sessionUserKey);
     setHistory(localHistory);
 
     if (!hasSupabaseBrowserConfig || !session.userId) {
@@ -393,14 +396,14 @@ export function Feature1Page({ session }: Feature1PageProps) {
       if (!isMounted) return;
       if (response.ok) {
         setHistory(response.entries);
-        saveReelHistory(session.email, response.entries);
+        saveReelHistory(sessionUserKey, response.entries);
       }
     });
 
     return () => {
       isMounted = false;
     };
-  }, [session, session?.email, session?.userId]);
+  }, [session, sessionUserKey, session?.userId]);
 
   useEffect(() => {
     if (!dragState) return undefined;
@@ -592,7 +595,13 @@ export function Feature1Page({ session }: Feature1PageProps) {
     setStatusMessage('Flow viewport recentered.');
   };
 
-  const [uploadHistory, setUploadHistory] = useState<UploadHistoryItem[]>(() => loadUploadHistory());
+  const [uploadHistory, setUploadHistory] = useState<UploadHistoryItem[]>(() =>
+    loadUploadHistory(sessionUserKey)
+  );
+
+  useEffect(() => {
+    setUploadHistory(loadUploadHistory(sessionUserKey));
+  }, [sessionUserKey]);
 
   const resetGeneratedState = useCallback(() => {
     setResult(null);
@@ -619,7 +628,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
     };
     const next = [historyItem, ...uploadHistory.filter(h => h.publicId !== uploadResult.public_id)].slice(0, 10);
     setUploadHistory(next);
-    saveUploadHistory(next);
+    saveUploadHistory(next, sessionUserKey);
   };
 
   const handleSelectFromHistory = (item: UploadHistoryItem) => {
@@ -637,7 +646,9 @@ export function Feature1Page({ session }: Feature1PageProps) {
     setTranscriptionPublicId(item.publicId);
     resetGeneratedState();
     // Load any saved transcript for this video
-    const saved = loadTranscriptData(item.publicId);
+    const saved = sessionUserKey
+      ? loadTranscriptData(sessionUserKey, item.publicId)
+      : loadTranscriptData(item.publicId);
     if (saved?.transcript) {
       setTranscriptText(saved.transcript);
       setTranscriptionDetails((current) => ({
@@ -652,7 +663,9 @@ export function Feature1Page({ session }: Feature1PageProps) {
       }));
       setStatusMessage(`Loaded "${item.label}" with saved transcript.`);
     } else {
-      setTranscriptText(loadTranscript(item.publicId));
+      setTranscriptText(
+        sessionUserKey ? loadTranscript(sessionUserKey, item.publicId) : loadTranscript(item.publicId)
+      );
       setTranscriptionDetails(null);
       setStatusMessage(`Loaded "${item.label}" from recent uploads.`);
     }
@@ -682,7 +695,11 @@ export function Feature1Page({ session }: Feature1PageProps) {
       });
       setTranscriptText(response.transcript);
       setTranscriptionDetails(response);
-      saveTranscriptData(publicId, response);
+      if (sessionUserKey) {
+        saveTranscriptData(sessionUserKey, publicId, response);
+      } else {
+        saveTranscriptData(publicId, response);
+      }
       setStatusMessage(`Cloudinary transcript loaded for ${response.publicId || publicId}.`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to transcribe.');
@@ -832,7 +849,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
 
       const nextHistory = [entry, ...history].slice(0, 10);
       setHistory(nextHistory);
-      saveReelHistory(session.email, nextHistory);
+      saveReelHistory(sessionUserKey, nextHistory);
       if (hasSupabaseBrowserConfig && session.userId) {
         await persistReelHistoryEntry(session.userId, entry);
       }
@@ -1209,7 +1226,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                   <div className="upload-zone__actions">
                     <UploadWidget
                       buttonText="Choose Video File"
-                      clientAllowedFormats={['mp4', 'mov', 'm4v', 'webm']}
+                      clientAllowedFormats={FEATURE1_VIDEO_UPLOAD_FORMATS}
                       onUploadError={handleSourceUploadError}
                       onUploadSuccess={handleSourceUploadSuccess}
                       resourceType="video"
@@ -1352,7 +1369,13 @@ export function Feature1Page({ session }: Feature1PageProps) {
                       value={transcriptText}
                       onChange={(event) => {
                         setTranscriptText(event.target.value);
-                        if (transcriptionPublicId) saveTranscript(transcriptionPublicId, event.target.value);
+                        if (transcriptionPublicId) {
+                          if (sessionUserKey) {
+                            saveTranscript(sessionUserKey, transcriptionPublicId, event.target.value);
+                          } else {
+                            saveTranscript(transcriptionPublicId, event.target.value);
+                          }
+                        }
                         setTranscriptionDetails((current) =>
                           current
                             ? {
