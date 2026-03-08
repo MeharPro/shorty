@@ -5521,6 +5521,38 @@
   background: rgba(15, 23, 42, 0.5);
 }
 
+.cloudinary-render-video {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.cloudinary-render-video__status {
+  position: absolute;
+  inset: auto 8px 8px 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  color: #e2e8f0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  text-align: center;
+  backdrop-filter: blur(8px);
+  z-index: 2;
+}
+
+.cloudinary-render-video__status--error {
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fecaca;
+}
+
+.hook-filter__render,
+.reel-card-v2__render {
+  width: 100%;
+  height: 100%;
+}
+
 .hook-filter__video {
   width: 100px;
   height: 75px;
@@ -5877,8 +5909,8 @@
 
 .face-detect-video__captions {
   position: absolute;
-  left: 20px;
-  right: 20px;
+  left: 24px;
+  right: 24px;
   z-index: 9;
   display: flex;
   justify-content: center;
@@ -5904,9 +5936,9 @@
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  gap: 8px;
-  max-width: 78%;
-  width: min(78%, 100%);
+  gap: 6px;
+  max-width: 68%;
+  width: min(68%, 100%);
   padding: 0;
 }
 
@@ -5922,7 +5954,7 @@
   display: inline-flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   max-width: 100%;
   overflow-wrap: anywhere;
 }
@@ -5931,10 +5963,10 @@
   color: #f8fafc;
   font-family: Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif;
   font-weight: 800;
-  line-height: 0.96;
+  line-height: 0.98;
   text-transform: uppercase;
-  letter-spacing: 0.02em;
-  -webkit-text-stroke: 4px #020617;
+  letter-spacing: 0.015em;
+  -webkit-text-stroke: 3px #020617;
   paint-order: stroke fill;
   text-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
   max-width: 100%;
@@ -5942,11 +5974,11 @@
 }
 
 .face-detect-video__captions--clean .face-detect-video__caption-word {
-  font-size: clamp(1.12rem, 2.4vw, 1.42rem);
+  font-size: clamp(0.94rem, 2vw, 1.18rem);
 }
 
 .face-detect-video__captions--shaking .face-detect-video__caption-word {
-  font-size: clamp(1.18rem, 2.6vw, 1.5rem);
+  font-size: clamp(1rem, 2.1vw, 1.24rem);
 }
 
 .face-detect-video__caption-word--active {
@@ -6033,13 +6065,13 @@
 
 @media (max-width: 640px) {
   .face-detect-video__caption-line {
-    max-width: 94%;
-    padding: 10px 12px;
+    max-width: 78%;
+    padding: 0;
   }
 
   .face-detect-video__captions {
-    left: 10px;
-    right: 10px;
+    left: 16px;
+    right: 16px;
   }
 }
 

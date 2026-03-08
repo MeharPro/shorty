@@ -91,6 +91,8 @@ export function createUploadHistoryItemFromCloudinarySourceVideo(
     secureUrl: video.secureUrl,
     label: video.label,
     duration: video.duration,
+    width: video.width,
+    height: video.height,
     thumbnailUrl: video.thumbnailUrl || buildVideoThumbnailUrl(video.publicId, video.secureUrl),
     uploadedAt: video.createdAt || new Date().toISOString(),
   };

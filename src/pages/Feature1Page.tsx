@@ -25,9 +25,9 @@ import {
   saveTranscriptData,
   type UploadHistoryItem,
 } from '../lib/persistence';
-import { buildCaptionCues } from '../lib/captions';
 import { generateReels } from '../lib/reels';
 import { auditGeneratedClips, chooseRecommendedClip } from '../lib/reelQualityAudit';
+import { analyzeSpeakerCropWindows } from '../lib/speakerCrop';
 import { analyzeVideoExpressions } from '../lib/visualAnalysis';
 import {
   fetchReelHistory,
@@ -36,7 +36,7 @@ import {
 } from '../lib/supabase';
 import { AgentChatPanel } from '../components/agent/AgentChatPanel';
 import { WorkflowSidebarTabs } from '../components/agent/WorkflowSidebarTabs';
-import { FaceDetectVideo } from '../components/FaceDetectVideo';
+import { CloudinaryRenderedVideo } from '../components/CloudinaryRenderedVideo';
 import { buildFeature1WorkflowGraph } from '../lib/agent/feature1Adapter';
 import { downloadJsonFile } from '../lib/agent/export';
 import type { AgentCommandResponse, CustomBlockDefinition } from '../lib/agent/types';
@@ -46,6 +46,7 @@ import type { ShortySession } from '../lib/session';
 import type {
   MediaAsset,
   Feature1EditingAdvice,
+  Feature1CropWindow,
   ReelGenerationResponse,
   ReelHistoryEntry,
   VideoTranscriptionResponse,
@@ -143,22 +144,6 @@ const GENERATE_STAGES = [
 ];
 
 const FEATURE1_VIDEO_UPLOAD_FORMATS = ['mp4', 'mov', 'm4v', 'webm'];
-
-function collectUniqueUrls(values: Array<string | null | undefined>): string[] {
-  const seen = new Set<string>();
-  const urls: string[] = [];
-
-  for (const value of values) {
-    if (!value || seen.has(value)) {
-      continue;
-    }
-
-    seen.add(value);
-    urls.push(value);
-  }
-
-  return urls;
-}
 
 const INITIAL_CORE_NODES: CoreFlowNode[] = [
   { id: 'upload', label: 'Upload', icon: '📤', description: 'Add source video', x: 80, y: 120 },
@@ -344,6 +329,8 @@ export function Feature1Page({ session }: Feature1PageProps) {
   const [result, setResult] = useState<ReelGenerationResponse | null>(null);
   const [filteredClipIds, setFilteredClipIds] = useState<Set<string>>(new Set());
   const [visualAnalysis, setVisualAnalysis] = useState<VisualAnalysisSummary | null>(null);
+  const [speakerCropWindows, setSpeakerCropWindows] = useState<Feature1CropWindow[] | null>(null);
+  const [speakerCropCacheKey, setSpeakerCropCacheKey] = useState<string | null>(null);
 
   // Editing options
   const [editRemoveSilences, setEditRemoveSilences] = useState(true);
@@ -506,26 +493,6 @@ export function Feature1Page({ session }: Feature1PageProps) {
   }, [coreNodeMap, getNodeStatus, logicBlocks, viewportOffset]);
 
   const selectedLogicBlock = logicBlocks.find((block) => block.id === selectedLogicBlockId) ?? null;
-  const clipCaptionMap = useMemo(() => {
-    if (!result || !transcriptionDetails?.segments?.length) {
-      return new Map<string, ReturnType<typeof buildCaptionCues>>();
-    }
-
-    return new Map(
-      result.clips.map((clip) => [
-        clip.id,
-        buildCaptionCues(transcriptionDetails.segments ?? [], {
-          clipStart: clip.startOffset,
-          clipDuration: clip.duration,
-          maxWordsPerCue: agentCaptionDensity === 'tight' ? 2 : 3,
-          maxCharsPerCue: agentCaptionDensity === 'tight' ? 12 : 18,
-          maxCueDuration: agentCaptionDensity === 'tight' ? 1.2 : 1.8,
-          maxLineChars: agentCaptionDensity === 'tight' ? 10 : 14,
-          maxLinesPerCue: 2,
-        }),
-      ])
-    );
-  }, [agentCaptionDensity, result, transcriptionDetails]);
 
   const startPan = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -674,6 +641,8 @@ export function Feature1Page({ session }: Feature1PageProps) {
       }
     ) => {
       setSourceAsset(asset);
+      setSpeakerCropWindows(null);
+      setSpeakerCropCacheKey(null);
       setTranscriptionPublicId(publicId);
       resetGeneratedState();
       setErrorMessage('');
@@ -717,6 +686,8 @@ export function Feature1Page({ session }: Feature1PageProps) {
     const historyItem = createUploadHistoryItemFromCloudinarySourceVideo(uploadedVideo);
 
     setSourceAsset(asset);
+    setSpeakerCropWindows(null);
+    setSpeakerCropCacheKey(null);
     setTranscriptionPublicId(uploadResult.public_id);
     resetGeneratedState();
     setErrorMessage('');
@@ -735,6 +706,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
   };
 
   const handleSelectFromHistory = (item: UploadHistoryItem) => {
+    const matchedCloudinaryVideo = cloudinarySourceVideos.find((video) => video.publicId === item.publicId);
     const asset: MediaAsset = {
       id: item.id,
       label: item.label,
@@ -744,6 +716,8 @@ export function Feature1Page({ session }: Feature1PageProps) {
       resourceType: 'video',
       strategy: 'cloudinary-public-id',
       duration: item.duration,
+      width: item.width ?? matchedCloudinaryVideo?.width,
+      height: item.height ?? matchedCloudinaryVideo?.height,
     };
     handleSelectSourceAsset(asset, {
       publicId: item.publicId,
@@ -822,6 +796,13 @@ export function Feature1Page({ session }: Feature1PageProps) {
 
     try {
       let resolvedVisualAnalysis = visualAnalysis;
+      const cropCacheKey = sourceAsset?.publicId || sourcePreviewUrl || null;
+      let resolvedCropWindows =
+        currentEditingOptions.faceFocus === false
+          ? []
+          : speakerCropCacheKey === cropCacheKey
+          ? speakerCropWindows
+          : null;
 
       if (
         sourcePreviewUrl &&
@@ -845,6 +826,31 @@ export function Feature1Page({ session }: Feature1PageProps) {
         }
       }
 
+      if (
+        sourcePreviewUrl &&
+        currentEditingOptions.faceFocus !== false &&
+        resolvedCropWindows === null
+      ) {
+        try {
+          resolvedCropWindows = await analyzeSpeakerCropWindows({
+            src: sourcePreviewUrl,
+            duration: sourceAsset?.duration,
+            safeFrameEnabled: currentEditingOptions.safeFaceFrame !== false,
+          });
+          setSpeakerCropWindows(resolvedCropWindows);
+          setSpeakerCropCacheKey(cropCacheKey);
+        } catch (cropError) {
+          setStatusMessage(
+            cropError instanceof Error
+              ? `${cropError.message} Continuing with Cloudinary auto focus if speaker tracking is unavailable.`
+              : 'Speaker crop scan skipped. Continuing with Cloudinary auto focus.'
+          );
+          resolvedCropWindows = [];
+          setSpeakerCropWindows([]);
+          setSpeakerCropCacheKey(cropCacheKey);
+        }
+      }
+
       for (let i = 1; i < GENERATE_STAGES.length; i++) {
         setGenerateStage(i);
         await new Promise((resolve) => setTimeout(resolve, GENERATE_STAGES[i].duration));
@@ -857,6 +863,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
         transcriptSegments: transcriptionDetails?.segments,
         visualAnalysis: resolvedVisualAnalysis,
         editingOptions: currentEditingOptions,
+        cropWindows: resolvedCropWindows ?? [],
       });
 
       const auditedClips =
@@ -1184,6 +1191,8 @@ export function Feature1Page({ session }: Feature1PageProps) {
   const handleStartNew = () => {
     setActiveCoreNode('upload');
     setSourceAsset(null);
+    setSpeakerCropWindows(null);
+    setSpeakerCropCacheKey(null);
     setTranscriptText('');
     setTranscriptionPublicId('');
     setTranscriptionLanguage('');
@@ -1916,8 +1925,8 @@ export function Feature1Page({ session }: Feature1PageProps) {
                       <label className={`editing-block ${editSafeFaceFrame ? 'editing-block--on' : ''}`}>
                         <div className="editing-block__icon">🧍</div>
                         <div className="editing-block__info">
-                          <strong>Safe Face Frame</strong>
-                          <span>Pad the final 9:16 render so the speaker’s full face stays visible</span>
+                          <strong>Speaker Crop</strong>
+                          <span>Keep the active speaker full-screen with a slightly looser face crop</span>
                         </div>
                         <div className="editing-block__toggle">
                           <input type="checkbox" checked={editSafeFaceFrame} onChange={(e) => setEditSafeFaceFrame(e.target.checked)} />
@@ -2026,17 +2035,20 @@ export function Feature1Page({ session }: Feature1PageProps) {
                           </button>
 
                           <div className="hook-filter__preview">
-                            <video
+                            <CloudinaryRenderedVideo
+                              key={clip.deliveryUrl}
+                              wrapperClassName="hook-filter__render"
                               className="hook-filter__video"
                               muted
                               playsInline
                               preload="metadata"
                               poster={clip.posterUrl}
-                              src={clip.previewUrl || clip.deliveryUrl || clip.aiPreviewUrl || clip.downloadUrl}
+                              src={clip.deliveryUrl || clip.downloadUrl}
+                              loadingLabel="Rendering..."
                               onMouseEnter={(e) => {
                                 const v = e.currentTarget;
                                 v.currentTime = 0;
-                                v.play().catch(() => { });
+                                v.play().catch(() => {});
                               }}
                               onMouseLeave={(e) => {
                                 e.currentTarget.pause();
@@ -2150,15 +2162,6 @@ export function Feature1Page({ session }: Feature1PageProps) {
                         const scorePercent = Math.round(clip.viralityScore);
                         const circumference = 2 * Math.PI * 38;
                         const strokeOffset = circumference - (scorePercent / 100) * circumference;
-                        const clipVideoSources = collectUniqueUrls([
-                          clip.deliveryUrl,
-                          clip.previewUrl,
-                          clip.aiPreviewUrl,
-                          clip.downloadUrl,
-                        ]);
-                        const cardVideoSrc = clipVideoSources[0] || '';
-                        const fallbackVideoSrcs = clipVideoSources.slice(1);
-                        const useRenderedVideo = clipVideoSources[0] === clip.deliveryUrl && Boolean(clip.deliveryUrl);
 
                         return (
                           <article
@@ -2169,19 +2172,18 @@ export function Feature1Page({ session }: Feature1PageProps) {
                             <div className="reel-card-v2__phone">
                               {recommended && <span className="reel-card-v2__badge">⭐ Best</span>}
                               {isTop && <span className="reel-card-v2__fire">🔥</span>}
-                              <FaceDetectVideo
-                                key={`${clip.id}:${clipVideoSources.join('|')}`}
-                                src={cardVideoSrc}
-                                fallbackSrcs={fallbackVideoSrcs}
+                              <CloudinaryRenderedVideo
+                                key={clip.deliveryUrl}
+                                wrapperClassName="reel-card-v2__render"
+                                className="reel-card-v2__video"
+                                autoPlay
+                                controls
+                                loop
+                                playsInline
+                                preload="metadata"
                                 poster={clip.posterUrl}
-                                faceFocusEnabled={editFaceFocus}
-                                safeFrameEnabled={editSafeFaceFrame}
-                                captions={clipCaptionMap.get(clip.id) || []}
-                                captionsEnabled={Boolean(clipCaptionMap.get(clip.id)?.length)}
-                                captionVariant={editShakingCaptions ? 'shaking' : 'clean'}
-                                focusStrategy={clip.focusStrategy}
-                                cameraMotion={clip.cameraMotion}
-                                suppressLocalEffectsOnPrimarySource={useRenderedVideo}
+                                src={clip.deliveryUrl || clip.downloadUrl}
+                                loadingLabel="Rendering final reel..."
                               />
                             </div>
 

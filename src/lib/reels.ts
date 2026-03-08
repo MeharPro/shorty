@@ -1,4 +1,5 @@
 import type {
+  Feature1CropWindow,
   Feature1EditingAdvice,
   MediaAsset,
   ReelGenerationResponse,
@@ -13,6 +14,7 @@ export interface GenerateReelsInput {
   transcriptSegments?: TranscriptSegment[];
   editingOptions?: Feature1EditingAdvice;
   visualAnalysis?: VisualAnalysisSummary | null;
+  cropWindows?: Feature1CropWindow[];
 }
 
 export async function generateReels({
@@ -22,6 +24,7 @@ export async function generateReels({
   transcriptSegments,
   editingOptions,
   visualAnalysis,
+  cropWindows,
 }: GenerateReelsInput): Promise<ReelGenerationResponse> {
   const response = await fetch('/api/generate-reels', {
     method: 'POST',
@@ -36,6 +39,7 @@ export async function generateReels({
       duration: sourceAsset?.duration,
       editingOptions,
       visualAnalysis,
+      cropWindows,
     }),
   });
 

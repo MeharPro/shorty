@@ -165,6 +165,16 @@ export interface Feature1EditingAdvice {
   viralStyle?: 'balanced' | 'aggressive';
 }
 
+export interface Feature1CropWindow {
+  start: number;
+  end: number;
+  cropX: number;
+  cropY: number;
+  cropWidth: number;
+  cropHeight: number;
+  speakerScore?: number;
+}
+
 export interface Feature1AgentPlan {
   model: string;
   summary: string;

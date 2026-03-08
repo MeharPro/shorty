@@ -1,7 +1,7 @@
 import { Cloudinary } from '@cloudinary/url-gen';
 import { format, quality } from '@cloudinary/url-gen/actions/delivery';
 import { source } from '@cloudinary/url-gen/actions/overlay';
-import { fill } from '@cloudinary/url-gen/actions/resize';
+import { crop, fill, scale } from '@cloudinary/url-gen/actions/resize';
 import { trim } from '@cloudinary/url-gen/actions/videoEdit';
 import { autoGravity, compass } from '@cloudinary/url-gen/qualifiers/gravity';
 import { focusOn as autoFocusOn } from '@cloudinary/url-gen/qualifiers/autoFocus';
@@ -19,7 +19,7 @@ const FEATURE1_CAPTION_STYLE = {
   backgroundColor: '#000000',
   backgroundVisible: false,
   fontFamily: 'Impact',
-  fontSize: 30,
+  fontSize: 24,
   fontWeight: 'bold',
   strokeColor: '#000000',
   strokeWidth: 3,
@@ -28,11 +28,20 @@ const FEATURE1_CAPTION_STYLE = {
   verticalOffset: 0,
 };
 
-const CAPTION_LINE_LIMIT = 14;
-const CAPTION_MAX_LINES = 2;
+const RENDER_WIDTH = 1080;
+const RENDER_HEIGHT = 1920;
+const CAPTION_MAX_LINES = 1;
+const MIN_CROP_SEGMENT_DURATION = 0.18;
+const MAX_DYNAMIC_CROP_SEGMENTS = 12;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function cleanText(value) {
@@ -74,10 +83,10 @@ function resolveCaptionStyle(editingOptions = {}) {
 
   return {
     ...FEATURE1_CAPTION_STYLE,
-    fontSize: shakingCaptions ? 32 : FEATURE1_CAPTION_STYLE.fontSize,
+    fontSize: shakingCaptions ? 26 : FEATURE1_CAPTION_STYLE.fontSize,
     strokeWidth: shakingCaptions ? 4 : FEATURE1_CAPTION_STYLE.strokeWidth,
-    maxWordsPerCue: editingOptions.captionDensity === 'tight' ? 2 : 3,
-    maxCharsPerLine: editingOptions.captionDensity === 'tight' ? 12 : 14,
+    maxWordsPerCue: 1,
+    maxCharsPerLine: editingOptions.captionDensity === 'tight' ? 10 : 12,
     maxLinesPerCue: CAPTION_MAX_LINES,
   };
 }
@@ -85,33 +94,10 @@ function resolveCaptionStyle(editingOptions = {}) {
 function splitFallbackCaptionLines(lines, fallbackText) {
   const sourceText = cleanText((Array.isArray(lines) ? lines.join(' ') : '') || fallbackText);
   if (!sourceText) {
-    return ['Watch this part'];
+    return ['Watch'];
   }
 
-  const words = sourceText.split(' ');
-  const nextLines = [];
-  let current = '';
-
-  for (const word of words) {
-    const candidate = current ? `${current} ${word}` : word;
-
-    if (candidate.length > CAPTION_LINE_LIMIT && current) {
-      nextLines.push(current);
-      current = word;
-    } else {
-      current = candidate;
-    }
-
-    if (nextLines.length === CAPTION_MAX_LINES) {
-      break;
-    }
-  }
-
-  if (current && nextLines.length < CAPTION_MAX_LINES) {
-    nextLines.push(current);
-  }
-
-  return nextLines.slice(0, CAPTION_MAX_LINES);
+  return [sourceText.split(/\s+/)[0] || 'Watch'];
 }
 
 function wrapCaptionWordsIntoLines(words, maxCharsPerLine, maxLines) {
@@ -151,7 +137,7 @@ function wrapCaptionWordsIntoLines(words, maxCharsPerLine, maxLines) {
 }
 
 function buildCaptionLayers(line, captionStyle, offsetY) {
-  const overlayText = sanitizeOverlayText(line) || 'Watch this part';
+  const overlayText = sanitizeOverlayText(line) || 'Watch';
   const textSource = text(overlayText, buildTextStyle(captionStyle)).textColor(
     normalizeColor(captionStyle.textColor)
   );
@@ -246,20 +232,316 @@ function createSourceVideo(cld, sourceDescriptor) {
     : cld.video(sourceDescriptor.publicId);
 }
 
+function formatOffset(value) {
+  const rounded = Math.round(Number(value || 0) * 1000) / 1000;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(3).replace(/\.?0+$/, '');
+}
+
+function cropWindowDifference(left, right) {
+  const leftCenterX = left.cropX + left.cropWidth / 2;
+  const rightCenterX = right.cropX + right.cropWidth / 2;
+  const leftCenterY = left.cropY + left.cropHeight / 2;
+  const rightCenterY = right.cropY + right.cropHeight / 2;
+
+  return (
+    Math.abs(leftCenterX - rightCenterX) * 1.8 +
+    Math.abs(leftCenterY - rightCenterY) * 0.8 +
+    Math.abs(left.cropWidth - right.cropWidth) +
+    Math.abs(left.cropHeight - right.cropHeight)
+  );
+}
+
+function mergeCropWindows(left, right) {
+  const leftDuration = Math.max(0.01, left.end - left.start);
+  const rightDuration = Math.max(0.01, right.end - right.start);
+  const totalDuration = leftDuration + rightDuration;
+
+  return {
+    start: left.start,
+    end: right.end,
+    cropX: (left.cropX * leftDuration + right.cropX * rightDuration) / totalDuration,
+    cropY: (left.cropY * leftDuration + right.cropY * rightDuration) / totalDuration,
+    cropWidth: (left.cropWidth * leftDuration + right.cropWidth * rightDuration) / totalDuration,
+    cropHeight: (left.cropHeight * leftDuration + right.cropHeight * rightDuration) / totalDuration,
+    speakerScore:
+      ((left.speakerScore || 0) * leftDuration + (right.speakerScore || 0) * rightDuration) /
+      totalDuration,
+  };
+}
+
+function normalizeCropWindows(input, sourceDuration) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const windows = input
+    .map((window) => {
+      const start = clamp(Number(window?.start || 0), 0, sourceDuration);
+      const end = clamp(Number(window?.end || 0), start, sourceDuration);
+      const cropWidth = clamp(Number(window?.cropWidth || 0), 0.12, 1);
+      const cropHeight = clamp(Number(window?.cropHeight || 0), 0.12, 1);
+      const cropX = clamp(Number(window?.cropX || 0), 0, Math.max(0, 1 - cropWidth));
+      const cropY = clamp(Number(window?.cropY || 0), 0, Math.max(0, 1 - cropHeight));
+
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end - start < MIN_CROP_SEGMENT_DURATION) {
+        return null;
+      }
+
+      return {
+        start,
+        end,
+        cropX,
+        cropY,
+        cropWidth,
+        cropHeight,
+        speakerScore: Number(window?.speakerScore || 0) || 0,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.start - right.start);
+
+  const merged = [];
+
+  windows.forEach((window) => {
+    const previousWindow = merged[merged.length - 1];
+
+    if (!previousWindow) {
+      merged.push(window);
+      return;
+    }
+
+    if (
+      window.start - previousWindow.end <= 0.1 &&
+      cropWindowDifference(previousWindow, window) < 0.055
+    ) {
+      previousWindow.end = Math.max(previousWindow.end, window.end);
+      previousWindow.cropX = (previousWindow.cropX + window.cropX) / 2;
+      previousWindow.cropY = (previousWindow.cropY + window.cropY) / 2;
+      previousWindow.cropWidth = (previousWindow.cropWidth + window.cropWidth) / 2;
+      previousWindow.cropHeight = (previousWindow.cropHeight + window.cropHeight) / 2;
+      previousWindow.speakerScore = Math.max(previousWindow.speakerScore || 0, window.speakerScore || 0);
+      return;
+    }
+
+    merged.push(window);
+  });
+
+  return merged;
+}
+
+function mergeClipCropSegments(left, right) {
+  const leftDuration = Math.max(0.01, left.end - left.start);
+  const rightDuration = Math.max(0.01, right.end - right.start);
+  const totalDuration = leftDuration + rightDuration;
+
+  return {
+    start: left.start,
+    end: right.end,
+    cropX: (left.cropX * leftDuration + right.cropX * rightDuration) / totalDuration,
+    cropY: (left.cropY * leftDuration + right.cropY * rightDuration) / totalDuration,
+    cropWidth: (left.cropWidth * leftDuration + right.cropWidth * rightDuration) / totalDuration,
+    cropHeight: (left.cropHeight * leftDuration + right.cropHeight * rightDuration) / totalDuration,
+  };
+}
+
+function compressClipCropSegments(segments) {
+  const nextSegments = [...segments];
+
+  while (nextSegments.length > MAX_DYNAMIC_CROP_SEGMENTS) {
+    let bestIndex = 0;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (let index = 0; index < nextSegments.length - 1; index += 1) {
+      const left = nextSegments[index];
+      const right = nextSegments[index + 1];
+      const combinedDuration = (left.end - left.start) + (right.end - right.start);
+      const score = cropWindowDifference(left, right) * 12 + combinedDuration;
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+
+    nextSegments.splice(
+      bestIndex,
+      2,
+      mergeClipCropSegments(nextSegments[bestIndex], nextSegments[bestIndex + 1])
+    );
+  }
+
+  return nextSegments;
+}
+
+function selectClipCropSegments(cropWindows, clipStart, clipDuration) {
+  if (!Array.isArray(cropWindows) || cropWindows.length === 0) {
+    return [];
+  }
+
+  const clipEnd = clipStart + clipDuration;
+  const overlaps = cropWindows
+    .map((window) => {
+      const start = Math.max(clipStart, window.start);
+      const end = Math.min(clipEnd, window.end);
+
+      if (end - start < MIN_CROP_SEGMENT_DURATION) {
+        return null;
+      }
+
+      return {
+        start: start - clipStart,
+        end: end - clipStart,
+        cropX: window.cropX,
+        cropY: window.cropY,
+        cropWidth: window.cropWidth,
+        cropHeight: window.cropHeight,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.start - right.start);
+
+  if (!overlaps.length) {
+    return [];
+  }
+
+  const filled = overlaps.map((segment) => ({ ...segment }));
+  filled[0].start = 0;
+
+  for (let index = 0; index < filled.length - 1; index += 1) {
+    const nextStart = clamp(filled[index + 1].start, filled[index].start, clipDuration);
+    filled[index].end = Math.max(filled[index].start + MIN_CROP_SEGMENT_DURATION, nextStart);
+  }
+
+  filled[filled.length - 1].end = clipDuration;
+
+  const filtered = filled.filter((segment) => segment.end - segment.start >= 0.08);
+  return compressClipCropSegments(filtered).map((segment, index, segments) => {
+    const nextStart = index < segments.length - 1 ? segments[index + 1].start : clipDuration;
+    const end = index === segments.length - 1 ? clipDuration : Math.max(segment.start + 0.08, nextStart);
+
+    return {
+      ...segment,
+      start: Math.max(0, segment.start),
+      duration: Math.max(0.08, end - segment.start),
+    };
+  });
+}
+
+function resolveCropPixels(segment, sourceWidth, sourceHeight) {
+  const width = clamp(Math.round(segment.cropWidth * sourceWidth), 1, sourceWidth);
+  const height = clamp(Math.round(segment.cropHeight * sourceHeight), 1, sourceHeight);
+  const x = clamp(Math.round(segment.cropX * sourceWidth), 0, Math.max(0, sourceWidth - width));
+  const y = clamp(Math.round(segment.cropY * sourceHeight), 0, Math.max(0, sourceHeight - height));
+
+  return { width, height, x, y };
+}
+
+function buildCropTransformation(cropPixels) {
+  return crop()
+    .width(cropPixels.width)
+    .height(cropPixels.height)
+    .x(cropPixels.x)
+    .y(cropPixels.y)
+    .toString();
+}
+
+function buildScaleTransformation() {
+  return scale().width(RENDER_WIDTH).height(RENDER_HEIGHT).toString();
+}
+
+function buildSpliceLayerTransformation(sourcePublicId, cropPixels, startOffset, duration) {
+  return [
+    `l_video:${serializeOverlayPublicId(sourcePublicId)}`,
+    buildCropTransformation(cropPixels),
+    buildScaleTransformation(),
+    `fl_splice,so_${formatOffset(startOffset)},du_${formatOffset(duration)}`,
+    'fl_layer_apply',
+  ].join('/');
+}
+
+function buildBaseClipRender({
+  cld,
+  sourceDescriptor,
+  startOffset,
+  duration,
+  editingOptions = {},
+  cropWindows = [],
+  sourceWidth = 0,
+  sourceHeight = 0,
+}) {
+  const canApplyDynamicCrop =
+    !sourceDescriptor.useFetch &&
+    Boolean(sourceDescriptor.publicId) &&
+    sourceWidth > 0 &&
+    sourceHeight > 0 &&
+    Array.isArray(cropWindows) &&
+    cropWindows.length > 0;
+
+  if (canApplyDynamicCrop) {
+    const clipCropSegments = selectClipCropSegments(cropWindows, startOffset, duration);
+
+    if (clipCropSegments.length > 0) {
+      const [firstSegment, ...remainingSegments] = clipCropSegments;
+      const firstCropPixels = resolveCropPixels(firstSegment, sourceWidth, sourceHeight);
+      const render = createSourceVideo(cld, sourceDescriptor)
+        .videoEdit(
+          trim()
+            .startOffset(startOffset + firstSegment.start)
+            .duration(firstSegment.duration)
+        )
+        .resize(
+          crop()
+            .width(firstCropPixels.width)
+            .height(firstCropPixels.height)
+            .x(firstCropPixels.x)
+            .y(firstCropPixels.y)
+        )
+        .resize(scale().width(RENDER_WIDTH).height(RENDER_HEIGHT));
+
+      remainingSegments.forEach((segment) => {
+        render.addTransformation(
+          buildSpliceLayerTransformation(
+            sourceDescriptor.publicId,
+            resolveCropPixels(segment, sourceWidth, sourceHeight),
+            startOffset + segment.start,
+            segment.duration
+          )
+        );
+      });
+
+      return render;
+    }
+  }
+
+  return createSourceVideo(cld, sourceDescriptor)
+    .videoEdit(trim().startOffset(startOffset).duration(duration))
+    .resize(fill().width(RENDER_WIDTH).height(RENDER_HEIGHT).gravity(buildFocusGravity(editingOptions)));
+}
+
 function buildRenderableClip({
   cld,
   sourceDescriptor,
   startOffset,
   duration,
   editingOptions = {},
+  cropWindows = [],
+  sourceWidth = 0,
+  sourceHeight = 0,
   subtitleAsset = null,
   captionLines = [],
   fallbackText = '',
 }) {
   const captionStyle = resolveCaptionStyle(editingOptions);
-  const render = createSourceVideo(cld, sourceDescriptor)
-    .videoEdit(trim().startOffset(startOffset).duration(duration))
-    .resize(fill().width(1080).height(1920).gravity(buildFocusGravity(editingOptions)));
+  const render = buildBaseClipRender({
+    cld,
+    sourceDescriptor,
+    startOffset,
+    duration,
+    editingOptions,
+    cropWindows,
+    sourceWidth,
+    sourceHeight,
+  });
 
   if (subtitleAsset?.publicId) {
     buildTimedSubtitlesTransformations(subtitleAsset, captionStyle).forEach((layer) => {
@@ -283,10 +565,25 @@ function buildRenderableClip({
   return render;
 }
 
-function buildPreviewClip({ cld, sourceDescriptor, startOffset, duration }) {
-  return createSourceVideo(cld, sourceDescriptor)
-    .videoEdit(trim().startOffset(startOffset).duration(duration))
-    .resize(fill().width(1080).height(1920).gravity(autoGravity().autoFocus(autoFocusOn(faces()))))
+function buildPreviewClip({
+  cld,
+  sourceDescriptor,
+  startOffset,
+  duration,
+  cropWindows = [],
+  sourceWidth = 0,
+  sourceHeight = 0,
+}) {
+  return buildBaseClipRender({
+    cld,
+    sourceDescriptor,
+    startOffset,
+    duration,
+    editingOptions: { faceFocus: true },
+    cropWindows,
+    sourceWidth,
+    sourceHeight,
+  })
     .delivery(format('mp4'))
     .delivery(quality(autoQuality()))
     .toURL();
@@ -303,13 +600,65 @@ function buildDeliveryUrl(options) {
     .toURL();
 }
 
-function buildAiPreviewUrl({ cld, sourceDescriptor, startOffset, duration, editingOptions = {} }) {
-  return createSourceVideo(cld, sourceDescriptor)
-    .videoEdit(trim().startOffset(startOffset).duration(duration))
-    .resize(fill().width(1080).height(1920).gravity(buildFocusGravity(editingOptions)))
+function buildAiPreviewUrl({
+  cld,
+  sourceDescriptor,
+  startOffset,
+  duration,
+  editingOptions = {},
+  cropWindows = [],
+  sourceWidth = 0,
+  sourceHeight = 0,
+}) {
+  return buildBaseClipRender({
+    cld,
+    sourceDescriptor,
+    startOffset,
+    duration,
+    editingOptions,
+    cropWindows,
+    sourceWidth,
+    sourceHeight,
+  })
     .delivery(format('mp4'))
     .delivery(quality(autoQuality()))
     .toURL();
+}
+
+function isRetryableDerivedAssetStatus(status) {
+  return [404, 420, 423, 425, 429].includes(status);
+}
+
+async function warmCloudinaryDerivedAsset(url, { attempts = 6, delayMs = 1200 } = {}) {
+  if (!url) {
+    return false;
+  }
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: 'HEAD',
+        redirect: 'follow',
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
+      });
+
+      if (response.ok) {
+        return true;
+      }
+
+      if (!isRetryableDerivedAssetStatus(response.status)) {
+        return false;
+      }
+    } catch {
+      // Keep retrying transient network issues; the browser preview has its own retry path too.
+    }
+
+    await sleep(delayMs);
+  }
+
+  return false;
 }
 
 function normalizeTranscriptSegments(input) {
@@ -428,7 +777,7 @@ function formatSrtTimestamp(totalSeconds) {
 }
 
 function splitAlignedCueSegments(wordTimings, maxWordsPerCue, maxCharsPerLine, maxLinesPerCue) {
-  const safeMaxWordsPerCue = clamp(maxWordsPerCue, 2, 6);
+  const safeMaxWordsPerCue = clamp(maxWordsPerCue, 1, 6);
   const safeMaxCharsPerLine = clamp(maxCharsPerLine, 8, 20);
   const safeMaxLinesPerCue = clamp(maxLinesPerCue, 1, 3);
   const safeMaxCharsPerCue = safeMaxCharsPerLine * safeMaxLinesPerCue;
@@ -609,10 +958,13 @@ export default async function handler(req, res) {
         : 'cloudinary-public-id';
     const publicId = sourceAsset?.publicId || null;
     const duration = clamp(Number(body.duration || sourceAsset?.duration || 180), 30, 3600);
+    const sourceWidth = Math.max(0, Math.round(Number(sourceAsset?.width || 0)));
+    const sourceHeight = Math.max(0, Math.round(Number(sourceAsset?.height || 0)));
     const transcriptText = String(body.transcriptText || '').trim();
     const transcriptSegments = normalizeTranscriptSegments(body.transcriptSegments);
     const editingOptions = body.editingOptions ?? {};
     const visualAnalysis = body.visualAnalysis ?? null;
+    const cropWindows = normalizeCropWindows(body.cropWindows, duration);
     const sourceDescriptor = resolveSourceDescriptor({
       sourceAsset,
       publicId,
@@ -660,6 +1012,9 @@ export default async function handler(req, res) {
           startOffset: clip.startOffset,
           duration: clip.duration,
           editingOptions,
+          cropWindows,
+          sourceWidth,
+          sourceHeight,
           subtitleAsset,
           captionLines: clip.captionLines,
           fallbackText: clip.transcriptExcerpt || clip.hook || clip.title,
@@ -669,9 +1024,16 @@ export default async function handler(req, res) {
           sourceDescriptor,
           startOffset: clip.startOffset,
           duration: clip.duration,
+          cropWindows,
+          sourceWidth,
+          sourceHeight,
         });
         const deliveryUrl = buildDeliveryUrl(renderOptions);
         const posterUrl = buildPosterUrl(renderOptions);
+        await Promise.all([
+          warmCloudinaryDerivedAsset(deliveryUrl),
+          warmCloudinaryDerivedAsset(posterUrl, { attempts: 4, delayMs: 800 }),
+        ]);
 
         return {
           ...clip,
@@ -685,6 +1047,9 @@ export default async function handler(req, res) {
             startOffset: clip.startOffset,
             duration: clip.duration,
             editingOptions,
+            cropWindows,
+            sourceWidth,
+            sourceHeight,
           }),
           subtitleAsset,
         };

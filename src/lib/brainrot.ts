@@ -879,10 +879,33 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
 }
 
 export function buildBrainrotCompositeUrl(options: BrainrotCompositeOptions) {
-  return buildCompositeAsset(options)
-    .delivery(format(autoFormat()))
-    .delivery(quality(autoQuality()))
-    .toURL();
+  return normalizeBrainrotVideoUrl(
+    buildCompositeAsset(options)
+      .delivery(format(autoFormat()))
+      .delivery(quality(autoQuality()))
+      .toURL()
+  );
+}
+
+export function normalizeBrainrotVideoUrl(url: string) {
+  if (!url.includes('/video/upload/')) {
+    return url;
+  }
+
+  const [baseUrl, queryString] = url.split('?');
+  const uploadMarker = '/video/upload/';
+
+  let nextUrl = baseUrl;
+
+  if (nextUrl.includes(`${uploadMarker}f_auto`)) {
+    nextUrl = nextUrl.replace(`${uploadMarker}f_auto`, `${uploadMarker}f_mp4`);
+  } else if (nextUrl.includes('/f_auto,')) {
+    nextUrl = nextUrl.replace('/f_auto,', '/f_mp4,');
+  } else if (!nextUrl.includes('/f_mp4') && !nextUrl.includes('/f_webm') && !nextUrl.includes('/f_mov')) {
+    nextUrl = nextUrl.replace(uploadMarker, `${uploadMarker}f_mp4/`);
+  }
+
+  return queryString ? `${nextUrl}?${queryString}` : nextUrl;
 }
 
 export function buildBrainrotCompositePosterUrl(options: BrainrotCompositeOptions) {

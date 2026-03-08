@@ -35,6 +35,7 @@ import {
   generateBrainrotScript,
   prepareBrainrotGameplayAsset,
   prepareBrainrotRemoteGameplayAsset,
+  normalizeBrainrotVideoUrl,
   resolveBrainrotGameplayUrl,
   synthesizeBrainrotVoice,
   type BrainrotAudioAsset,
@@ -1274,6 +1275,9 @@ export function Feature2Page({ session }: Feature2PageProps) {
     FALLBACK_BRAINROT_VOICE;
   const generatedRender =
     generatedRenders[selectedGeneratedRenderIndex] ?? generatedRenders[0] ?? null;
+  const generatedRenderUrl = generatedRender
+    ? normalizeBrainrotVideoUrl(generatedRender.deliveryUrl)
+    : '';
   const sortedVoices = sortVoicesByRecommendation(voices, preferredVoiceGender);
   const voiceSearchQuery = voiceSearchInput.trim().toLowerCase();
   const recommendedVoices =
@@ -4913,13 +4917,13 @@ export function Feature2Page({ session }: Feature2PageProps) {
                       <div className="brainrot-output-frame">
                         {generatedRender ? (
                           <video
-                            key={generatedRender.deliveryUrl}
+                            key={generatedRenderUrl}
                             autoPlay
                             controls
                             loop
                             playsInline
                             poster={generatedRender.posterUrl}
-                            src={generatedRender.deliveryUrl}
+                            src={generatedRenderUrl}
                           />
                         ) : captionLayoutPreviewUrl ? (
                           <video autoPlay loop muted playsInline src={captionLayoutPreviewUrl} />
@@ -4977,7 +4981,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                           <div className="brainrot-action-row">
                             <a
                               className="btn btn--ghost"
-                              href={generatedRender.deliveryUrl}
+                              href={generatedRenderUrl}
                               rel="noreferrer"
                               target="_blank"
                             >

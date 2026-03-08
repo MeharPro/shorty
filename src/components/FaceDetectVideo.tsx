@@ -261,14 +261,9 @@ function stabilizeFaces(
   return enriched.sort((left, right) => speakerPriority(right, null) - speakerPriority(left, null));
 }
 
-function getBaseVisibleArea(videoAspect: number | null, safeFrameEnabled: boolean) {
+function getBaseVisibleArea(videoAspect: number | null) {
   if (!videoAspect || !Number.isFinite(videoAspect) || videoAspect <= 0) {
-    return { width: 1, height: 1, useContainFrame: safeFrameEnabled };
-  }
-
-  const useContainFrame = safeFrameEnabled && videoAspect > PORTRAIT_CONTAINER_ASPECT;
-  if (useContainFrame) {
-    return { width: 1, height: 1, useContainFrame: true };
+    return { width: 1, height: 1, useContainFrame: false };
   }
 
   if (videoAspect > PORTRAIT_CONTAINER_ASPECT) {
@@ -343,8 +338,8 @@ export function FaceDetectVideo({
   }, [activeCue, playbackTime]);
 
   const { useContainFrame } = useMemo(
-    () => getBaseVisibleArea(videoAspect, safeFrameEnabled),
-    [safeFrameEnabled, videoAspect]
+    () => getBaseVisibleArea(videoAspect),
+    [videoAspect]
   );
 
   const captionPosition = useMemo(
@@ -353,16 +348,16 @@ export function FaceDetectVideo({
   );
 
   const videoStyle = useMemo(() => {
-    const baseVisibleArea = getBaseVisibleArea(videoAspect, safeFrameEnabled);
+    const baseVisibleArea = getBaseVisibleArea(videoAspect);
 
     if (!effectiveFaceFocusEnabled || !focusFace) {
-      return baseVisibleArea.useContainFrame ? { objectFit: 'contain' as const } : undefined;
+      return undefined;
     }
 
     const centerX = clamp((focusFace.x + focusFace.width / 2) * 100, 12, 88);
     const centerY = clamp((focusFace.y + focusFace.height / 2) * 100, 12, 88);
-    const horizontalPadding = safeFrameEnabled ? 0.16 : 0.08;
-    const verticalPadding = safeFrameEnabled ? 0.2 : 0.12;
+    const horizontalPadding = safeFrameEnabled ? 0.12 : 0.06;
+    const verticalPadding = safeFrameEnabled ? 0.16 : 0.08;
     const desiredWidth = clamp(focusFace.width + horizontalPadding * 2, 0.08, 1);
     const desiredHeight = clamp(focusFace.height + verticalPadding * 2, 0.12, 1);
     const fitScale = Math.min(
@@ -377,23 +372,21 @@ export function FaceDetectVideo({
           : (focusFace.mouthMotionScore ?? 0) > 0.42
             ? 0.02
             : 0;
-    const scaleCap = baseVisibleArea.useContainFrame
-      ? cameraMotion === 'shake'
-        ? 1.18
-        : 1.14
-      : focusStrategy === 'group'
-        ? 1.05
-        : cameraMotion === 'shake'
-          ? 1.12
-          : 1.08;
+    const scaleCap = focusStrategy === 'group'
+      ? 1.08
+      : cameraMotion === 'shake'
+        ? 1.3
+        : 1.22;
     const baseScale = clamp(Math.min(scaleCap, fitScale + motionZoom), 1, scaleCap);
 
     return {
-      objectFit: (baseVisibleArea.useContainFrame ? 'contain' : 'cover') as 'contain' | 'cover',
+      objectFit: 'cover' as const,
       objectPosition: `${centerX}% ${centerY}%`,
       transform: `scale(${baseScale})`,
     };
   }, [cameraMotion, effectiveFaceFocusEnabled, focusFace, focusStrategy, safeFrameEnabled, videoAspect]);
+
+  const captionLineLimit = captionVariant === 'shaking' ? 8 : 10;
 
   const captionRows = useMemo(() => {
     if (!activeCue) {
@@ -405,8 +398,8 @@ export function FaceDetectVideo({
         ? activeCue.words.map((word) => word.word)
         : activeCue.text.split(/\s+/).filter(Boolean);
 
-    return splitCaptionWordsIntoRows(words, captionVariant === 'shaking' ? 10 : 12);
-  }, [activeCue, captionVariant]);
+    return splitCaptionWordsIntoRows(words, captionLineLimit);
+  }, [activeCue, captionLineLimit]);
 
   useEffect(() => {
     if (loadTimeoutRef.current) {
