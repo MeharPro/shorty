@@ -1755,13 +1755,13 @@ export function Feature2Page({ session }: Feature2PageProps) {
             ? `${selectedGameplayPreset.label} is cached in Cloudinary and ready under the voiceover.`
             : `${selectedGameplayPreset.label} is ready under the voiceover.`
           : isCustomRemoteGameplayPreset
-            ? 'Attach a remote gameplay URL to complete this node.'
-            : 'Gameplay prep failed. Retry this node.',
+          ? 'Attach a remote gameplay URL to complete this node.'
+          : 'Gameplay prep failed. Retry this node.',
       code: isCustomRemoteGameplayPreset
-        ? 'POST /api/resolve-gameplay -> remote fetch'
+        ? 'POST /api/gameplay { action: resolve-remote }'
         : selectedGameplayPreset.source === 'remote'
-          ? 'POST /api/prepare-brainrot-remote-gameplay'
-          : 'GET /api/prepare-brainrot-gameplay',
+          ? 'POST /api/gameplay { action: prepare-remote }'
+          : 'POST /api/gameplay { action: prepare-local }',
       status: isGameplayBusy
         ? 'running'
         : activeRunStage === 'gameplay'

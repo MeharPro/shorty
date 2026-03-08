@@ -879,7 +879,15 @@ export function createFallbackBrainrotGameplayAsset(): MediaAsset | null {
 
 export async function prepareBrainrotGameplayAsset(): Promise<PrepareGameplayResponse> {
   try {
-    const response = await fetch('/api/prepare-brainrot-gameplay');
+    const response = await fetch('/api/gameplay', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'prepare-local',
+      }),
+    });
     const data = await readJsonResponse<PrepareGameplayResponse>(response);
 
     if (!data.asset) {
@@ -912,12 +920,15 @@ export async function prepareBrainrotRemoteGameplayAsset(input: {
   label: string;
   duration?: number;
 }): Promise<PrepareRemoteGameplayResponse> {
-  const response = await fetch('/api/prepare-brainrot-remote-gameplay', {
+  const response = await fetch('/api/gameplay', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      action: 'prepare-remote',
+      ...input,
+    }),
   });
 
   return readJsonResponse<PrepareRemoteGameplayResponse>(response);
@@ -965,12 +976,15 @@ export async function enhanceBrainrotPrompt(input: {
   previousPrompt?: string;
   templateId?: BrainrotTemplateId;
 }) {
-  const response = await fetch('/api/brainrot-prompt', {
+  const response = await fetch('/api/brainrot-ai', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      operation: 'enhance-prompt',
+      ...input,
+    }),
   });
 
   return readJsonResponse<BrainrotPromptEnhancementResponse>(response);
@@ -1028,24 +1042,30 @@ export async function synthesizeBrainrotVoice(input: {
 }
 
 export async function generateBrainrotNode(input: { prompt: string; seed?: string }) {
-  const response = await fetch('/api/brainrot-node', {
+  const response = await fetch('/api/brainrot-ai', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      operation: 'generate-node',
+      ...input,
+    }),
   });
 
   return readJsonResponse<BrainrotNodeSuggestion>(response);
 }
 
 export async function resolveBrainrotGameplayUrl(url: string): Promise<MediaAsset> {
-  const response = await fetch('/api/resolve-gameplay', {
+  const response = await fetch('/api/gameplay', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({
+      action: 'resolve-remote',
+      url,
+    }),
   });
   const data = await readJsonResponse<ResolveBrainrotGameplayResponse>(response);
 

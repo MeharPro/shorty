@@ -248,9 +248,15 @@ That file includes the reel history table and policies used by the app.
 
 Current API routes:
 - [api/health.js](api/health.js)
-- [api/render-manifest.js](api/render-manifest.js)
-- [api/resolve-gameplay.js](api/resolve-gameplay.js)
-- [api/sign-cloudinary.js](api/sign-cloudinary.js)
+- [api/agent-command.js](api/agent-command.js)
+- [api/brainrot-ai.js](api/brainrot-ai.js)
+- [api/brainrot-captions.js](api/brainrot-captions.js)
+- [api/brainrot-intro-card.js](api/brainrot-intro-card.js)
+- [api/brainrot-script.js](api/brainrot-script.js)
+- [api/brainrot-voice.js](api/brainrot-voice.js)
+- [api/brainrot-voices.js](api/brainrot-voices.js)
+- [api/feature1-agent.js](api/feature1-agent.js)
+- [api/gameplay.js](api/gameplay.js)
 - [api/generate-reels.js](api/generate-reels.js)
 - [api/transcribe-video.js](api/transcribe-video.js)
 
