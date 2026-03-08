@@ -1,17 +1,91 @@
 const ELEVENLABS_VOICES_URL = 'https://api.elevenlabs.io/v1/voices';
+const GOOGLE_VOICES = [
+  {
+    id: 'google:Kore',
+    name: 'Kore',
+    category: 'google-ai',
+    labels: {
+      descriptive: 'firm',
+      use_case: 'story',
+      gender: 'female',
+    },
+    previewUrl: '',
+  },
+  {
+    id: 'google:Puck',
+    name: 'Puck',
+    category: 'google-ai',
+    labels: {
+      descriptive: 'upbeat',
+      use_case: 'social',
+      gender: 'male',
+    },
+    previewUrl: '',
+  },
+  {
+    id: 'google:Charon',
+    name: 'Charon',
+    category: 'google-ai',
+    labels: {
+      descriptive: 'informative',
+      use_case: 'narration',
+      gender: 'male',
+    },
+    previewUrl: '',
+  },
+  {
+    id: 'google:Leda',
+    name: 'Leda',
+    category: 'google-ai',
+    labels: {
+      descriptive: 'youthful',
+      use_case: 'story',
+      gender: 'female',
+    },
+    previewUrl: '',
+  },
+  {
+    id: 'google:Aoede',
+    name: 'Aoede',
+    category: 'google-ai',
+    labels: {
+      descriptive: 'breezy',
+      use_case: 'social',
+      gender: 'female',
+    },
+    previewUrl: '',
+  },
+  {
+    id: 'google:Fenrir',
+    name: 'Fenrir',
+    category: 'google-ai',
+    labels: {
+      descriptive: 'excitable',
+      use_case: 'story',
+      gender: 'male',
+    },
+    previewUrl: '',
+  },
+];
+
 const DEFAULT_VOICE = {
-  id: '21m00Tcm4TlvDq8ikWAM',
-  name: 'Rachel',
-  category: 'premade',
-  labels: {},
+  id: 'google:Kore',
+  name: 'Kore',
+  category: 'google-ai',
+  labels: {
+    descriptive: 'firm',
+    use_case: 'story',
+    gender: 'female',
+  },
   previewUrl: '',
 };
 
-function fallbackPayload() {
+function fallbackPayload(warning) {
   return {
-    voices: [DEFAULT_VOICE],
+    voices: GOOGLE_VOICES,
     defaultVoiceId: DEFAULT_VOICE.id,
     fallback: true,
+    warning,
   };
 }
 
@@ -23,11 +97,18 @@ export default async function handler(req, res) {
   }
 
   const apiKey = process.env.ELEVENLABS_API_KEY;
+  const googleApiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
     res.status(200).json({
-      ...fallbackPayload(),
-      warning: 'ELEVENLABS_API_KEY is not configured on the server.',
+      ...(googleApiKey
+        ? fallbackPayload('ELEVENLABS_API_KEY is not configured. Google AI voices are available instead.')
+        : {
+            voices: [DEFAULT_VOICE],
+            defaultVoiceId: DEFAULT_VOICE.id,
+            fallback: true,
+            warning: 'No voice provider is configured. Set ELEVENLABS_API_KEY or GEMINI_API_KEY on the server.',
+          }),
     });
     return;
   }
@@ -59,7 +140,16 @@ export default async function handler(req, res) {
       : [];
 
     if (!voices.length) {
-      res.status(200).json(fallbackPayload());
+      res.status(200).json(
+        googleApiKey
+          ? fallbackPayload('ElevenLabs returned no voices. Showing Google AI voices instead.')
+          : {
+              voices: [DEFAULT_VOICE],
+              defaultVoiceId: DEFAULT_VOICE.id,
+              fallback: true,
+              warning: 'ElevenLabs returned no voices.',
+            }
+      );
       return;
     }
 
@@ -69,8 +159,18 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     res.status(200).json({
-      ...fallbackPayload(),
-      warning: error instanceof Error ? error.message : 'Failed to load ElevenLabs voices.',
+      ...(googleApiKey
+        ? fallbackPayload(
+            error instanceof Error
+              ? `${error.message} Google AI voices are available instead.`
+              : 'Failed to load ElevenLabs voices. Google AI voices are available instead.'
+          )
+        : {
+            voices: [DEFAULT_VOICE],
+            defaultVoiceId: DEFAULT_VOICE.id,
+            fallback: true,
+            warning: error instanceof Error ? error.message : 'Failed to load ElevenLabs voices.',
+          }),
     });
   }
 }

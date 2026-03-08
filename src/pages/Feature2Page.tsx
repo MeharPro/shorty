@@ -46,6 +46,7 @@ import {
   type BrainrotGameplayPresetId,
   type BrainrotGameplayPreset,
   type BrainrotVoiceOption,
+  type BrainrotVoiceResponse,
   type BrainrotVoiceSettings,
 } from '../lib/brainrot';
 import { buildPlayableSourceUrl } from '../lib/rendering';
@@ -60,6 +61,7 @@ type CanvasSelectionId = BrainrotStageId | string;
 type FlowNodeStatus = 'locked' | 'ready' | 'running' | 'complete' | 'error';
 type LogTone = 'info' | 'success' | 'warn' | 'error';
 type VoiceFilterMode = 'recommended' | 'expressive-female' | 'expressive-male' | 'all' | 'cloned';
+type ScriptVariationMode = 'same-script' | 'different-scripts';
 
 interface FlowNodeModel {
   id: BrainrotStageId;
@@ -78,17 +80,29 @@ interface ActivityLogEntry {
 }
 
 interface GeneratedRender {
+  id: string;
+  label: string;
+  seriesLabel: string;
   deliveryUrl: string;
   posterUrl: string;
   generatedAt: string;
   plan: string[];
   script: BrainrotScriptPackage;
+  introCard: BrainrotIntroCard;
+  captionText: string;
   audioAsset: BrainrotAudioAsset;
   subtitleAsset: BrainrotSubtitleAsset | null;
   voiceName: string;
+  voiceProvider: string;
   gameplayLabel: string;
   typeLabel: string;
   durationSeconds: number;
+}
+
+interface BrainrotBatchSettings {
+  videoCount: number;
+  partLabelsEnabled: boolean;
+  scriptVariationMode: ScriptVariationMode;
 }
 
 interface CoreCanvasNode {
@@ -137,6 +151,11 @@ const TARGET_DURATION_STEP = 5;
 const DEFAULT_TARGET_DURATION = 75;
 const TARGET_DURATION_PRESETS = [60, 75, 90];
 const DEFAULT_TEMPLATE_ID: BrainrotTemplateId = 'satisfying-template';
+const DEFAULT_BATCH_SETTINGS: BrainrotBatchSettings = {
+  videoCount: 1,
+  partLabelsEnabled: false,
+  scriptVariationMode: 'different-scripts',
+};
 const CAPTION_GUIDE_LINE_LIMIT = 22;
 const CAPTION_GUIDE_MAX_LINES = 3;
 const CAPTION_PREVIEW_FONT_SCALE = 0.62;
@@ -388,6 +407,74 @@ function withAlpha(color: string, alpha: number) {
   return normalized;
 }
 
+function normalizeBatchVideoCount(value: number) {
+  return clamp(Math.round(value || 1), 1, 4);
+}
+
+function buildPartLabel(index: number) {
+  return `Part ${index + 1}`;
+}
+
+function stripPartLabel(value: string) {
+  return value.replace(/\bpart\s+\d+\b/gi, '').replace(/\s+/g, ' ').trim();
+}
+
+function appendPartLabel(value: string, partLabel: string) {
+  const base = stripPartLabel(value);
+  return partLabel ? `${base} ${partLabel}`.replace(/\s+/g, ' ').trim() : base;
+}
+
+function deriveIntroCardTitleFromScript(
+  script: Pick<BrainrotScriptPackage, 'introCardTitle' | 'captionText' | 'title'>,
+  brainrotType: BrainrotTypeId
+) {
+  const autoTitle =
+    script.introCardTitle.trim() ||
+    script.captionText.trim() ||
+    script.title.trim() ||
+    `${BRAINROT_TYPE_PRESETS.find((preset) => preset.id === brainrotType)?.tag ?? 'Story'} Watch`;
+
+  return stripPartLabel(autoTitle).slice(0, 28);
+}
+
+function deriveIntroCardQuestionFromScript(
+  script: Pick<BrainrotScriptPackage, 'introCardQuestion' | 'hook' | 'captionText'>,
+  fallbackQuestion: string
+) {
+  const raw =
+    script.introCardQuestion.trim() ||
+    script.hook.trim() ||
+    script.captionText.trim() ||
+    fallbackQuestion.trim() ||
+    'What happened next?';
+
+  return ensureQuestion(raw).slice(0, 84);
+}
+
+function buildEffectiveIntroCard(
+  introCard: BrainrotIntroCard,
+  script: BrainrotScriptPackage,
+  options: {
+    brainrotType: BrainrotTypeId;
+    titleLocked: boolean;
+    questionLocked: boolean;
+    partLabel?: string;
+  }
+) {
+  const nextTitle = options.titleLocked
+    ? stripPartLabel(introCard.title)
+    : deriveIntroCardTitleFromScript(script, options.brainrotType);
+  const nextQuestion = options.questionLocked
+    ? introCard.question
+    : deriveIntroCardQuestionFromScript(script, introCard.question);
+
+  return {
+    ...introCard,
+    title: appendPartLabel(nextTitle, options.partLabel || ''),
+    question: nextQuestion,
+  };
+}
+
 function readVoiceLabel(voice: BrainrotVoiceOption, key: string) {
   const matchedKey = Object.keys(voice.labels).find(
     (candidate) => candidate.toLowerCase().replace(/\s+/g, '_') === key
@@ -486,13 +573,21 @@ function buildGeminiInputPreview({
   scriptGuidance,
   targetDurationSeconds,
   introCard,
+  batchSettings,
 }: {
   typeLabel: string;
   prompt: string;
   scriptGuidance: string;
   targetDurationSeconds: number;
   introCard: BrainrotIntroCard;
+  batchSettings: BrainrotBatchSettings;
 }) {
+  const videoCount = normalizeBatchVideoCount(batchSettings.videoCount);
+  const partPreview =
+    batchSettings.partLabelsEnabled && videoCount > 1
+      ? Array.from({ length: videoCount }, (_, index) => buildPartLabel(index)).join(', ')
+      : 'off';
+
   return [
     `Brain rot style: ${typeLabel}`,
     `Topic: ${prompt.trim() || 'Describe the reel idea here.'}`,
@@ -500,6 +595,8 @@ function buildGeminiInputPreview({
     introCard.enabled
       ? `Opening card: rounded story card for ${INTRO_CARD_DURATION_SECONDS.toFixed(1)}s using ${introCard.title.trim() || 'Story Watch'} / ${introCard.question.trim() || 'Add your opening question here.'}`
       : 'Opening card: disabled',
+    `Batch output: ${videoCount} video${videoCount === 1 ? '' : 's'} with ${batchSettings.scriptVariationMode === 'same-script' ? 'the same script reused' : 'different Gemini-written scripts'}.`,
+    `Series labels: ${partPreview}`,
     `Target: ${targetDurationSeconds} second vertical voiceover with a strong hook and timed captions.`,
   ].join('\n');
 }
@@ -519,6 +616,8 @@ function buildManualScriptPackage(
     hook: cleanCaption || 'Watch this one closely',
     spokenScript: cleanScript,
     captionText: cleanCaption || 'Watch this one closely',
+    introCardTitle: stripPartLabel(typeLabel) || 'Story Watch',
+    introCardQuestion: ensureQuestion(cleanCaption || 'What happened next?') || 'What happened next?',
     visualNotes: [
       'Use the generated voiceover as the only live audio bed.',
       'Keep the gameplay moving fast under the caption position you staged.',
@@ -629,6 +728,9 @@ function createRunSignature(input: {
   gameplayStartOffset: number;
   manualScriptMode: boolean;
   manualCaptionMode: boolean;
+  batchSettings: BrainrotBatchSettings;
+  introCardTitleManual: boolean;
+  introCardQuestionManual: boolean;
 }) {
   return JSON.stringify(input);
 }
@@ -806,6 +908,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
     question: defaultTemplate.defaultIntroQuestion,
     durationSeconds: INTRO_CARD_DURATION_SECONDS,
   });
+  const [isIntroCardTitleManual, setIsIntroCardTitleManual] = useState(false);
+  const [isIntroCardQuestionManual, setIsIntroCardQuestionManual] = useState(false);
   const [voiceSettings, setVoiceSettings] = useState<BrainrotVoiceSettings>(
     DEFAULT_BRAINROT_VOICE_SETTINGS
   );
@@ -830,7 +934,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const [isGameplayCached, setIsGameplayCached] = useState(false);
   const [isGameplayFallback, setIsGameplayFallback] = useState(false);
   const [statusMessage, setStatusMessage] = useState(
-    'Choose the voice, gameplay bed, caption style, and duration, then click Run to generate the AI voiceover reel.'
+    'Choose the voice, gameplay bed, caption style, and duration, then click Run to generate the AI reel.'
   );
   const [selectedNode, setSelectedNode] = useState<CanvasSelectionId>('prompt');
   const [canvasSize, setCanvasSize] = useState({
@@ -845,12 +949,16 @@ export function Feature2Page({ session }: Feature2PageProps) {
     'idle'
   );
   const [activeRunStage, setActiveRunStage] = useState<BrainrotStageId | null>(null);
-  const [generatedRender, setGeneratedRender] = useState<GeneratedRender | null>(null);
+  const [batchSettings, setBatchSettings] = useState<BrainrotBatchSettings>(DEFAULT_BATCH_SETTINGS);
+  const [generatedRenders, setGeneratedRenders] = useState<GeneratedRender[]>([]);
+  const [selectedGeneratedRenderIndex, setSelectedGeneratedRenderIndex] = useState(0);
   const [lastRunSignature, setLastRunSignature] = useState('');
   const [isRunDialogOpen, setIsRunDialogOpen] = useState(false);
   const [isNodeEditorOpen, setIsNodeEditorOpen] = useState(false);
   const [runPromptDraft, setRunPromptDraft] = useState(promptInput);
   const [runScriptGuidanceDraft, setRunScriptGuidanceDraft] = useState(scriptGuidance);
+  const [runBatchSettingsDraft, setRunBatchSettingsDraft] =
+    useState<BrainrotBatchSettings>(DEFAULT_BATCH_SETTINGS);
   const [aiNodePrompt, setAiNodePrompt] = useState('');
   const [isAiNodeGenerating, setIsAiNodeGenerating] = useState(false);
   const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([
@@ -923,6 +1031,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
     voices.find((voice) => voice.id === selectedVoiceId) ??
     voices[0] ??
     FALLBACK_BRAINROT_VOICE;
+  const generatedRender =
+    generatedRenders[selectedGeneratedRenderIndex] ?? generatedRenders[0] ?? null;
   const sortedVoices = sortVoicesByRecommendation(voices, preferredVoiceGender);
   const voiceSearchQuery = voiceSearchInput.trim().toLowerCase();
   const recommendedVoices =
@@ -939,11 +1049,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
     const useCase = readVoiceLabel(voice, 'use_case').toLowerCase();
     const descriptive = readVoiceLabel(voice, 'descriptive').toLowerCase();
 
-    if (voiceFilterMode === 'expressive-female' && gender !== 'female') {
+    if (voiceFilterMode === 'expressive-female' && gender && gender !== 'female') {
       return false;
     }
 
-    if (voiceFilterMode === 'expressive-male' && gender !== 'male') {
+    if (voiceFilterMode === 'expressive-male' && gender && gender !== 'male') {
       return false;
     }
 
@@ -1000,8 +1110,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
     gameplayStartOffset: safeGameplayOffset,
     manualScriptMode,
     manualCaptionMode,
+    batchSettings,
+    introCardTitleManual: isIntroCardTitleManual,
+    introCardQuestionManual: isIntroCardQuestionManual,
   });
-  const isRenderDirty = Boolean(generatedRender) && lastRunSignature !== runSignature;
+  const isRenderDirty = generatedRenders.length > 0 && lastRunSignature !== runSignature;
   const canRun =
     Boolean(promptInput.trim() && selectedVoiceId) &&
     !isVoicesLoading &&
@@ -1033,7 +1146,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
     scriptGuidance: runScriptGuidanceDraft,
     targetDurationSeconds,
     introCard,
+    batchSettings: runBatchSettingsDraft,
   });
+  const activeScript = generatedRender?.script ?? lastGeneratedScript;
+  const activeVoiceAsset = generatedRender?.audioAsset ?? voiceAsset;
+  const activeSubtitleAsset = generatedRender?.subtitleAsset ?? subtitleAsset;
 
   useEffect(() => {
     const node = canvasStageRef.current;
@@ -1073,7 +1190,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
   const loadVoices = async () => {
     setIsVoicesLoading(true);
-    appendLog('Loading available ElevenLabs voices for the voice node.', 'info');
+    appendLog('Loading available AI voices for the voice node.', 'info');
 
     try {
       const response = await fetchBrainrotVoices();
@@ -1087,7 +1204,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       appendLog(
         response.warning
           ? `Voices loaded with fallback data: ${response.warning}`
-          : `Loaded ${response.voices.length} ElevenLabs voice options and ranked the ${preferredVoiceGender} picks first.`,
+          : `Loaded ${response.voices.length} AI voice options and ranked the ${preferredVoiceGender} picks first.`,
         response.warning ? 'warn' : 'success'
       );
     } catch (error) {
@@ -1225,8 +1342,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
     void Promise.allSettled([
       defaultTemplate.gameplayPresetId === 'custom-remote'
         ? Promise.resolve(null)
-        : defaultTemplate.gameplayPresetId === 'satisfying-ice-cream' ||
-            defaultTemplate.gameplayPresetId === 'satisfying-bubbles'
+        : (
+              BRAINROT_GAMEPLAY_PRESETS.find(
+                (preset) => preset.id === defaultTemplate.gameplayPresetId
+              ) ?? BRAINROT_GAMEPLAY_PRESETS[0]
+            ).source === 'remote'
           ? prepareBuiltInRemoteGameplay(
               BRAINROT_GAMEPLAY_PRESETS.find((preset) => preset.id === defaultTemplate.gameplayPresetId) ??
                 BRAINROT_GAMEPLAY_PRESETS[0],
@@ -1244,6 +1364,14 @@ export function Feature2Page({ session }: Feature2PageProps) {
       setSelectedNode('prompt');
     }
   }, [canvasNodes, selectedNode]);
+
+  useEffect(() => {
+    if (selectedGeneratedRenderIndex < generatedRenders.length) {
+      return;
+    }
+
+    setSelectedGeneratedRenderIndex(Math.max(0, generatedRenders.length - 1));
+  }, [generatedRenders.length, selectedGeneratedRenderIndex]);
 
   useEffect(() => {
     if (!isRunDialogOpen) {
@@ -1435,11 +1563,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
     {
       id: 'voice',
       step: '03',
-      title: 'ElevenLabs voice',
-      summary: voiceAsset
-        ? `${selectedVoice.name} voiceover ready • ${formatDuration(voiceAsset.duration)}`
+      title: 'AI voice',
+      summary: activeVoiceAsset
+        ? `${selectedVoice.name} voiceover ready • ${formatDuration(activeVoiceAsset.duration)}`
         : isVoicesLoading
-          ? 'Loading ElevenLabs voices.'
+          ? 'Loading AI voices.'
           : `${selectedVoice.name} is selected for the ${preferredVoiceGender} AI narration.`,
       code: 'POST /api/brainrot-voice',
       status: isVoicesLoading
@@ -1492,7 +1620,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       code: 'POST /api/brainrot-captions -> Cloudinary subtitles overlay',
       status: activeRunStage === 'caption'
         ? 'running'
-        : subtitleAsset || captionText.trim()
+        : activeSubtitleAsset || captionText.trim()
           ? 'complete'
           : promptInput.trim()
             ? 'ready'
@@ -1513,7 +1641,9 @@ export function Feature2Page({ session }: Feature2PageProps) {
       summary: generatedRender
         ? isRenderDirty
           ? 'Inputs changed. Run again to refresh the final render.'
-          : `Rendered ${new Date(generatedRender.generatedAt).toLocaleTimeString()} • ${generatedRender.durationSeconds}s`
+          : generatedRenders.length > 1
+            ? `Rendered ${generatedRenders.length} reels • selected ${generatedRender.label}`
+            : `Rendered ${new Date(generatedRender.generatedAt).toLocaleTimeString()} • ${generatedRender.durationSeconds}s`
         : 'Generate the final Cloudinary reel with embedded voiceover and timed captions.',
       code: 'buildBrainrotCompositeUrl()',
       status: renderState === 'running' || activeRunStage === 'render'
@@ -1782,6 +1912,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
       question: template.defaultIntroQuestion,
       durationSeconds: INTRO_CARD_DURATION_SECONDS,
     });
+    setIsIntroCardTitleManual(false);
+    setIsIntroCardQuestionManual(false);
     setVoiceFilterMode(nextVoiceFilterMode);
     setSelectedVoiceId((current) => {
       if (voices.some((voice) => voice.id === current)) {
@@ -1824,7 +1956,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       void prepareBuiltInRemoteGameplay(preset);
     }
 
-    if (preset.id === 'satisfying-ice-cream' || preset.id === 'satisfying-bubbles') {
+    if (preset.source === 'remote' && preset.id !== 'custom-remote') {
       setSelectedTemplateId('satisfying-template');
       setVoiceFilterMode('expressive-female');
       setSelectedVoiceId((current) =>
@@ -1979,15 +2111,27 @@ export function Feature2Page({ session }: Feature2PageProps) {
     setIsNodeEditorOpen(false);
     setRunPromptDraft(promptInput);
     setRunScriptGuidanceDraft(scriptGuidance);
+    setRunBatchSettingsDraft(batchSettings);
     setIsRunDialogOpen(true);
   };
 
   const handleRun = async (options?: {
     promptOverride?: string;
     scriptGuidanceOverride?: string;
+    batchSettingsOverride?: BrainrotBatchSettings;
   }) => {
     const effectivePromptInput = options?.promptOverride ?? promptInput;
     const effectiveScriptGuidance = options?.scriptGuidanceOverride ?? scriptGuidance;
+    const effectiveBatchSettings: BrainrotBatchSettings = {
+      videoCount: normalizeBatchVideoCount(
+        options?.batchSettingsOverride?.videoCount ?? batchSettings.videoCount
+      ),
+      partLabelsEnabled: Boolean(
+        options?.batchSettingsOverride?.partLabelsEnabled ?? batchSettings.partLabelsEnabled
+      ),
+      scriptVariationMode:
+        options?.batchSettingsOverride?.scriptVariationMode ?? batchSettings.scriptVariationMode,
+    };
 
     if (!effectivePromptInput.trim()) {
       setSelectedNode('prompt');
@@ -1998,7 +2142,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
     if (!selectedVoiceId) {
       setSelectedNode('voice');
-      setStatusMessage('Pick an ElevenLabs voice before running the pipeline.');
+      setStatusMessage('Pick an AI voice before running the pipeline.');
       appendLog('Run blocked because the voice node is incomplete.', 'error');
       return;
     }
@@ -2054,201 +2198,337 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
     setPromptInput(effectivePromptInput);
     setScriptGuidance(effectiveScriptGuidance);
+    setBatchSettings(effectiveBatchSettings);
     setRenderState('running');
     setSubtitleAsset(null);
+    setGeneratedRenders([]);
+    setSelectedGeneratedRenderIndex(0);
     setSelectedNode('script');
-    setStatusMessage('Running the AI brain rot reel pipeline.');
+    setStatusMessage(
+      `Running ${effectiveBatchSettings.videoCount} AI reel${effectiveBatchSettings.videoCount === 1 ? '' : 's'}.`
+    );
     appendLog('Run started. Executing the graph in code order.', 'info');
 
     try {
-      let effectiveScript: BrainrotScriptPackage;
-
-      if (manualScriptMode && scriptDraft.trim()) {
-        effectiveScript = buildManualScriptPackage(scriptDraft, captionText, brainrotType);
-        appendLog('Using the manual script override instead of regenerating copy.', 'info');
-      } else {
-        setActiveRunStage('script');
-        appendLog(
-          `Generating ${selectedTypePreset.label} copy with Gemini 2.5 Flash.`,
-          'info'
-        );
-        const scriptResponse = await generateBrainrotScript({
-          prompt: effectivePromptInput,
-          brainrotType,
-          scriptGuidance: effectiveScriptGuidance,
-          targetDurationSeconds,
-        });
-        effectiveScript = scriptResponse.script;
-        setLastGeneratedScript(scriptResponse.script);
-        setScriptDraft(scriptResponse.script.spokenScript);
-        setManualScriptMode(false);
-
-        if (!manualCaptionMode || !captionText.trim()) {
-          setCaptionText(pickAutomaticCaption(scriptResponse.script));
-        }
-
-        if (scriptResponse.warning) {
-          appendLog(scriptResponse.warning, 'warn');
-        }
-
-        appendLog('Script node complete. Gemini returned the narration and caption hook.', 'success');
-      }
-
-      effectiveScript = applyIntroCardToScript(effectiveScript, introCard);
-      setLastGeneratedScript(effectiveScript);
-      setScriptDraft(effectiveScript.spokenScript);
-
-      const introLeadInSeconds =
-        introCard.enabled && introCard.question.trim() ? INTRO_CARD_DURATION_SECONDS : 0;
-      const effectiveCaption =
-        manualCaptionMode && captionText.trim()
-          ? captionText
-          : pickAutomaticCaption(effectiveScript);
-
-      setActiveRunStage('voice');
-      setSelectedNode('voice');
-      appendLog(`Sending the script to ElevenLabs voice "${selectedVoice.name}".`, 'info');
-      const voiceResponse = await synthesizeBrainrotVoice({
-        text: effectiveScript.spokenScript,
-        voiceId: selectedVoiceId,
-        voiceSettings,
-        seed: buildAssetSeed(brainrotType, effectiveScript.title),
-      });
-      setVoiceAsset(voiceResponse.audioAsset);
-      appendLog(
-        `Voice node complete. Audio uploaded to Cloudinary at ${formatDuration(
-          voiceResponse.durationSeconds
-        )}.`,
-        'success'
-      );
-      const measuredVoiceDuration =
-        voiceResponse.durationSeconds || voiceResponse.audioAsset.duration || targetDurationSeconds;
-      const clipDuration = ensuredGameplay.duration
-        ? clamp(
-            Math.max(targetDurationSeconds, Math.ceil(measuredVoiceDuration + introLeadInSeconds + 1)),
-            TARGET_DURATION_MIN,
-            Math.max(TARGET_DURATION_MIN, Math.floor(ensuredGameplay.duration))
-          )
-        : Math.max(targetDurationSeconds, Math.ceil(measuredVoiceDuration + introLeadInSeconds + 1));
-
-      setActiveRunStage('gameplay');
-      setSelectedNode('gameplay');
-      appendLog(
-        isCustomRemoteGameplayPreset
-          ? 'Gameplay bed ready. Reusing the attached remote gameplay feed.'
-          : selectedGameplayPreset.source === 'remote'
-            ? `Gameplay bed ready. Reusing the cached ${selectedGameplayPreset.label} clip.`
-          : `Gameplay bed ready. Reusing ${selectedGameplayPreset.label}.`,
-        'info'
-      );
-      await delay(120);
-
-      setActiveRunStage('caption');
-      setSelectedNode('caption');
-      if (!manualCaptionMode) {
-        setCaptionText(effectiveCaption);
-      }
-      appendLog(
-        `Caption node armed with ${selectedCaptionPreset.label} styling and timed subtitle sync.`,
-        'info'
-      );
-      let nextSubtitleAsset: BrainrotSubtitleAsset | null = null;
-
-      try {
-        const captionResponse = await generateBrainrotCaptions({
-          text: effectiveScript.spokenScript,
-          durationSeconds: measuredVoiceDuration,
-          seed: buildAssetSeed(brainrotType, effectiveScript.title),
-          maxWordsPerCue: captionStyle.maxWordsPerCue,
-          trimStartSeconds: introLeadInSeconds,
-          wordTimings: voiceResponse.alignment?.words,
-        });
-        nextSubtitleAsset = captionResponse.subtitleAsset;
-        setSubtitleAsset(captionResponse.subtitleAsset);
-        appendLog(
-          `Timed captions generated with ${captionResponse.subtitleAsset.cueCount} cues.`,
-          'success'
-        );
-      } catch (captionError) {
-        const nextMessage =
-          captionError instanceof Error
-            ? captionError.message
-            : 'Timed caption generation failed. Falling back to the hook caption.';
-        setSubtitleAsset(null);
-        appendLog(nextMessage, 'warn');
-      }
-      await delay(120);
-
-      setActiveRunStage('music');
-      setSelectedNode('music');
-      appendLog('Music lane intentionally skipped. Voiceover-only render for this pass.', 'warn');
-      await delay(120);
-
-      setActiveRunStage('render');
-      setSelectedNode('render');
-      let introCardAsset = null;
-
-      if (introLeadInSeconds > 0) {
-        try {
-          const introCardResponse = await generateBrainrotIntroCardAsset(introCard);
-          introCardAsset = introCardResponse.asset;
-          appendLog('Opening card rebuilt as a rounded story post for the first three seconds.', 'success');
-        } catch (introCardError) {
-          appendLog(
-            introCardError instanceof Error
-              ? introCardError.message
-              : 'Failed to build the opening story card. Continuing without it.',
-            'warn'
-          );
-        }
-      }
-
+      const nextGeneratedRenders: GeneratedRender[] = [];
+      const priorScripts: BrainrotScriptPackage[] = [];
+      const shouldReuseScriptAssets =
+        manualScriptMode || effectiveBatchSettings.scriptVariationMode === 'same-script';
       const safeOffset = ensuredGameplay.duration
         ? clamp(
             safeGameplayOffset,
             0,
-            Math.max(0, Math.floor((ensuredGameplay.duration ?? 120) - clipDuration))
+            Math.max(0, Math.floor((ensuredGameplay.duration ?? 120) - targetDurationSeconds))
           )
         : Math.max(0, safeGameplayOffset);
-      const compositeOptions = {
-        gameplayAsset: ensuredGameplay,
-        voiceoverAsset: voiceResponse.audioAsset,
-        subtitlesAsset: nextSubtitleAsset,
-        captionText: effectiveCaption,
-        clipDuration,
-        gameplayStartOffset: safeOffset,
-        captionStyle,
-        layoutStyle,
-        introCard,
-        introCardAsset,
-      };
-      const deliveryUrl = buildBrainrotCompositeUrl(compositeOptions);
-      const posterUrl = buildBrainrotCompositePosterUrl(compositeOptions);
-      const plan = buildBrainrotRunPlan({
-        brainrotType,
-        voiceLabel: selectedVoice.name,
-        gameplayLabel: ensuredGameplay.label,
-        captionText: effectiveCaption,
-        captionStyle,
-        layoutStyle,
-        durationSeconds: clipDuration,
-        timedCaptions: Boolean(nextSubtitleAsset),
-        introCard,
-      });
+      let cachedScript: BrainrotScriptPackage | null = null;
+      let cachedVoiceResponse: BrainrotVoiceResponse | null = null;
+      let cachedSubtitleAsset: BrainrotSubtitleAsset | null = null;
+      let cachedClipDuration: number | null = null;
 
-      setGeneratedRender({
-        deliveryUrl,
-        posterUrl,
-        generatedAt: new Date().toISOString(),
-        plan,
-        script: effectiveScript,
-        audioAsset: voiceResponse.audioAsset,
-        subtitleAsset: nextSubtitleAsset,
-        voiceName: selectedVoice.name,
-        gameplayLabel: ensuredGameplay.label,
-        typeLabel: selectedTypePreset.label,
-        durationSeconds: clipDuration,
-      });
+      if (manualScriptMode && scriptDraft.trim() && effectiveBatchSettings.videoCount > 1) {
+        appendLog(
+          'Manual script override is active, so every batch output will reuse the same narration.',
+          'warn'
+        );
+      }
+
+      for (let index = 0; index < effectiveBatchSettings.videoCount; index += 1) {
+        const partLabel =
+          effectiveBatchSettings.partLabelsEnabled && effectiveBatchSettings.videoCount > 1
+            ? buildPartLabel(index)
+            : '';
+        const renderLabel = partLabel || `Video ${index + 1}`;
+        const batchPrefix =
+          effectiveBatchSettings.videoCount > 1
+            ? `[${index + 1}/${effectiveBatchSettings.videoCount}] `
+            : '';
+
+        let baseScript: BrainrotScriptPackage;
+
+        if (shouldReuseScriptAssets && cachedScript) {
+          baseScript = cachedScript;
+          appendLog(`${batchPrefix}Reusing the existing script for ${renderLabel}.`, 'info');
+        } else if (manualScriptMode && scriptDraft.trim()) {
+          baseScript = buildManualScriptPackage(scriptDraft, captionText, brainrotType);
+          cachedScript = baseScript;
+          appendLog(`${batchPrefix}Using the manual script override for ${renderLabel}.`, 'info');
+        } else {
+          setActiveRunStage('script');
+          setSelectedNode('script');
+          appendLog(`${batchPrefix}Generating ${selectedTypePreset.label} copy with Gemini.`, 'info');
+          const scriptResponse = await generateBrainrotScript({
+            prompt: effectivePromptInput,
+            brainrotType,
+            scriptGuidance: effectiveScriptGuidance,
+            targetDurationSeconds,
+            variationIndex: index + 1,
+            variationCount: effectiveBatchSettings.videoCount,
+            partLabel,
+            previousTitles: priorScripts.map((script) => script.title),
+            previousHooks: priorScripts.map((script) => script.hook),
+          });
+          baseScript = scriptResponse.script;
+          priorScripts.push(scriptResponse.script);
+
+          if (shouldReuseScriptAssets && !cachedScript) {
+            cachedScript = scriptResponse.script;
+          }
+
+          if (scriptResponse.warning) {
+            appendLog(scriptResponse.warning, 'warn');
+          }
+
+          appendLog(
+            `${batchPrefix}Script node complete. Gemini returned the narration and intro-card copy.`,
+            'success'
+          );
+        }
+
+        const effectiveIntroCard = buildEffectiveIntroCard(introCard, baseScript, {
+          brainrotType,
+          titleLocked: isIntroCardTitleManual,
+          questionLocked: isIntroCardQuestionManual,
+          partLabel,
+        });
+        const effectiveScript = applyIntroCardToScript(baseScript, effectiveIntroCard);
+        const introLeadInSeconds =
+          effectiveIntroCard.enabled && effectiveIntroCard.question.trim()
+            ? INTRO_CARD_DURATION_SECONDS
+            : 0;
+        const effectiveCaption =
+          manualCaptionMode && captionText.trim()
+            ? captionText
+            : pickAutomaticCaption(effectiveScript);
+
+        if (index === 0) {
+          setLastGeneratedScript(effectiveScript);
+          setScriptDraft(effectiveScript.spokenScript);
+          if (!manualCaptionMode) {
+            setCaptionText(effectiveCaption);
+          }
+          if (!isIntroCardTitleManual || !isIntroCardQuestionManual) {
+            setIntroCard(effectiveIntroCard);
+          }
+        }
+
+        setActiveRunStage('voice');
+        setSelectedNode('voice');
+        let voiceResponse: BrainrotVoiceResponse | null = cachedVoiceResponse;
+
+        if (!voiceResponse || !shouldReuseScriptAssets) {
+          appendLog(`${batchPrefix}Sending the script to the AI voice node "${selectedVoice.name}".`, 'info');
+          voiceResponse = await synthesizeBrainrotVoice({
+            text: effectiveScript.spokenScript,
+            voiceId: selectedVoiceId,
+            voiceSettings,
+            seed: buildAssetSeed(brainrotType, `${effectiveScript.title} ${renderLabel}`),
+          });
+          setVoiceAsset(voiceResponse.audioAsset);
+
+          if (voiceResponse.warning) {
+            appendLog(voiceResponse.warning, 'warn');
+          }
+
+          appendLog(
+            `${batchPrefix}Voice node complete via ${voiceResponse.provider} at ${formatDuration(
+              voiceResponse.durationSeconds
+            )}.`,
+            'success'
+          );
+
+          if (shouldReuseScriptAssets) {
+            cachedVoiceResponse = voiceResponse;
+          }
+        } else {
+          appendLog(`${batchPrefix}Reusing the existing voice track for ${renderLabel}.`, 'info');
+          setVoiceAsset(voiceResponse.audioAsset);
+        }
+
+        if (!voiceResponse) {
+          throw new Error('Voice synthesis did not return an audio asset.');
+        }
+
+        const measuredVoiceDuration =
+          voiceResponse.durationSeconds || voiceResponse.audioAsset.duration || targetDurationSeconds;
+        const clipDuration: number =
+          cachedClipDuration && shouldReuseScriptAssets
+            ? cachedClipDuration
+            : ensuredGameplay.duration
+              ? clamp(
+                  Math.max(
+                    targetDurationSeconds,
+                    Math.ceil(measuredVoiceDuration + introLeadInSeconds + 1)
+                  ),
+                  TARGET_DURATION_MIN,
+                  Math.max(TARGET_DURATION_MIN, Math.floor(ensuredGameplay.duration))
+                )
+              : Math.max(
+                  targetDurationSeconds,
+                  Math.ceil(measuredVoiceDuration + introLeadInSeconds + 1)
+                );
+
+        if (shouldReuseScriptAssets && !cachedClipDuration) {
+          cachedClipDuration = clipDuration;
+        }
+
+        const safeLoopOffset = ensuredGameplay.duration
+          ? clamp(
+              safeOffset,
+              0,
+              Math.max(0, Math.floor((ensuredGameplay.duration ?? 120) - clipDuration))
+            )
+          : safeOffset;
+
+        setActiveRunStage('gameplay');
+        setSelectedNode('gameplay');
+        appendLog(
+          batchPrefix +
+            (isCustomRemoteGameplayPreset
+              ? 'Gameplay bed ready. Reusing the attached remote gameplay feed.'
+              : selectedGameplayPreset.source === 'remote'
+                ? `Gameplay bed ready. Reusing the cached ${selectedGameplayPreset.label} clip.`
+                : `Gameplay bed ready. Reusing ${selectedGameplayPreset.label}.`),
+          'info'
+        );
+        await delay(120);
+
+        setActiveRunStage('caption');
+        setSelectedNode('caption');
+        let nextSubtitleAsset: BrainrotSubtitleAsset | null = shouldReuseScriptAssets
+          ? cachedSubtitleAsset
+          : null;
+
+        if (!nextSubtitleAsset) {
+          appendLog(
+            `${batchPrefix}Caption node armed with ${selectedCaptionPreset.label} styling and timed subtitle sync.`,
+            'info'
+          );
+
+          try {
+            const captionResponse = await generateBrainrotCaptions({
+              text: effectiveScript.spokenScript,
+              durationSeconds: measuredVoiceDuration,
+              seed: buildAssetSeed(brainrotType, `${effectiveScript.title} ${renderLabel}`),
+              maxWordsPerCue: captionStyle.maxWordsPerCue,
+              trimStartSeconds: introLeadInSeconds,
+              wordTimings: voiceResponse.alignment?.words,
+            });
+            nextSubtitleAsset = captionResponse.subtitleAsset;
+            setSubtitleAsset(captionResponse.subtitleAsset);
+            appendLog(
+              `${batchPrefix}Timed captions generated with ${captionResponse.subtitleAsset.cueCount} cues.`,
+              'success'
+            );
+          } catch (captionError) {
+            const nextMessage =
+              captionError instanceof Error
+                ? captionError.message
+                : 'Timed caption generation failed. Falling back to the hook caption.';
+            setSubtitleAsset(null);
+            appendLog(nextMessage, 'warn');
+          }
+
+          if (shouldReuseScriptAssets) {
+            cachedSubtitleAsset = nextSubtitleAsset;
+          }
+        } else {
+          setSubtitleAsset(nextSubtitleAsset);
+          appendLog(`${batchPrefix}Reusing the timed captions for ${renderLabel}.`, 'info');
+        }
+        await delay(120);
+
+        setActiveRunStage('music');
+        setSelectedNode('music');
+        appendLog(`${batchPrefix}Music lane intentionally skipped. Voiceover-only render for this pass.`, 'warn');
+        await delay(120);
+
+        setActiveRunStage('render');
+        setSelectedNode('render');
+        let introCardAsset = null;
+
+        if (introLeadInSeconds > 0) {
+          try {
+            const introCardResponse = await generateBrainrotIntroCardAsset(effectiveIntroCard);
+            introCardAsset = introCardResponse.asset;
+            appendLog(
+              `${batchPrefix}Opening card rebuilt as a rounded story post for ${renderLabel}.`,
+              'success'
+            );
+          } catch (introCardError) {
+            appendLog(
+              introCardError instanceof Error
+                ? introCardError.message
+                : 'Failed to build the opening story card. Continuing without it.',
+              'warn'
+            );
+          }
+        }
+
+        const compositeOptions = {
+          gameplayAsset: ensuredGameplay,
+          voiceoverAsset: voiceResponse.audioAsset,
+          subtitlesAsset: nextSubtitleAsset,
+          captionText: effectiveCaption,
+          clipDuration,
+          gameplayStartOffset: safeLoopOffset,
+          captionStyle,
+          layoutStyle,
+          introCard: effectiveIntroCard,
+          introCardAsset,
+        };
+        const deliveryUrl = buildBrainrotCompositeUrl(compositeOptions);
+        const posterUrl = buildBrainrotCompositePosterUrl(compositeOptions);
+        const voiceProviderLabel =
+          voiceResponse.provider === 'google-ai' ? 'Google AI' : 'ElevenLabs';
+        const plan = buildBrainrotRunPlan({
+          brainrotType,
+          voiceLabel: `${selectedVoice.name} via ${voiceProviderLabel}`,
+          gameplayLabel: ensuredGameplay.label,
+          captionText: effectiveCaption,
+          captionStyle,
+          layoutStyle,
+          durationSeconds: clipDuration,
+          timedCaptions: Boolean(nextSubtitleAsset),
+          introCard: effectiveIntroCard,
+        });
+
+        nextGeneratedRenders.push({
+          id: crypto.randomUUID(),
+          label: renderLabel,
+          seriesLabel: partLabel,
+          deliveryUrl,
+          posterUrl,
+          generatedAt: new Date().toISOString(),
+          plan,
+          script: effectiveScript,
+          introCard: effectiveIntroCard,
+          captionText: effectiveCaption,
+          audioAsset: voiceResponse.audioAsset,
+          subtitleAsset: nextSubtitleAsset,
+          voiceName: selectedVoice.name,
+          voiceProvider: voiceResponse.provider,
+          gameplayLabel: ensuredGameplay.label,
+          typeLabel: selectedTypePreset.label,
+          durationSeconds: clipDuration,
+        });
+        setGeneratedRenders([...nextGeneratedRenders]);
+      }
+
+      const firstRender = nextGeneratedRenders[0] ?? null;
+
+      if (firstRender) {
+        setSelectedGeneratedRenderIndex(0);
+        setLastGeneratedScript(firstRender.script);
+        setScriptDraft(firstRender.script.spokenScript);
+        setVoiceAsset(firstRender.audioAsset);
+        setSubtitleAsset(firstRender.subtitleAsset);
+        setIntroCard(firstRender.introCard);
+        if (!manualCaptionMode) {
+          setCaptionText(firstRender.captionText);
+        }
+      }
+
       setLastRunSignature(
         createRunSignature({
           templateId: selectedTemplateId,
@@ -2261,20 +2541,32 @@ export function Feature2Page({ session }: Feature2PageProps) {
           remoteGameplayUrl,
           selectedCaptionPresetId,
           voiceSettings,
-          scriptText: effectiveScript.spokenScript,
-          captionText: effectiveCaption,
+          scriptText: firstRender?.script.spokenScript || scriptDraft,
+          captionText: firstRender?.captionText || captionText,
           captionStyle,
           layoutStyle,
-          introCard,
+          introCard: firstRender?.introCard || introCard,
           gameplayStartOffset: safeOffset,
           manualScriptMode,
           manualCaptionMode,
+          batchSettings: effectiveBatchSettings,
+          introCardTitleManual: isIntroCardTitleManual,
+          introCardQuestionManual: isIntroCardQuestionManual,
         })
       );
       setRenderState('complete');
       setActiveRunStage(null);
-      setStatusMessage('Run complete. The AI voiceover reel is ready.');
-      appendLog('Render complete. Final Cloudinary output URL generated.', 'success');
+      setStatusMessage(
+        nextGeneratedRenders.length > 1
+          ? `Run complete. ${nextGeneratedRenders.length} AI voiceover reels are ready.`
+          : 'Run complete. The AI voiceover reel is ready.'
+      );
+      appendLog(
+        nextGeneratedRenders.length > 1
+          ? `Render complete. ${nextGeneratedRenders.length} final Cloudinary output URLs generated.`
+          : 'Render complete. Final Cloudinary output URL generated.',
+        'success'
+      );
     } catch (error) {
       setRenderState('error');
       setActiveRunStage(null);
@@ -2290,6 +2582,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
     void handleRun({
       promptOverride: runPromptDraft,
       scriptGuidanceOverride: runScriptGuidanceDraft,
+      batchSettingsOverride: runBatchSettingsDraft,
     });
   };
 
@@ -2323,7 +2616,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
         <div className="feature-page__kicker">Feature 2</div>
         <h1 className="feature-page__title">Brain Rot AI Reels</h1>
         <p className="feature-page__desc">
-          Prompt the reel, let Gemini write it, let ElevenLabs say it, and keep the freeform graph
+          Prompt the reel, let Gemini write it, let the AI voice stack say it, and keep the freeform graph
           visible while a timed-captioned gameplay bed carries the background.
         </p>
       </div>
@@ -2602,8 +2895,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
                       : 'Disabled'}
                   </strong>
                   <p>
-                    The opener is now a rounded story post card that sits alone for the
-                    first three seconds before narration and captions begin.
+                    The opener is now a rounded story post card that stays on-screen for the
+                    first three seconds while the narration starts immediately and captions stay hidden.
                   </p>
                   {introCard.enabled ? <RedditIntroCardPreview introCard={introCard} /> : null}
                 </div>
@@ -2612,12 +2905,13 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   <input
                     type="text"
                     value={introCard.title}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      setIsIntroCardTitleManual(true);
                       setIntroCard((current) => ({
                         ...current,
                         title: event.target.value,
-                      }))
-                    }
+                      }));
+                    }}
                     placeholder="Story Watch"
                   />
                 </label>
@@ -2626,12 +2920,13 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   <textarea
                     rows={3}
                     value={introCard.question}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      setIsIntroCardQuestionManual(true);
                       setIntroCard((current) => ({
                         ...current,
                         question: event.target.value,
-                      }))
-                    }
+                      }));
+                    }}
                     placeholder="What family tradition ruined your family?"
                   />
                 </label>
@@ -3147,7 +3442,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
                 <div className="brainrot-static-card">
                   <span>Caption mode</span>
-                  <strong>Timed short-phrase captions synced to the ElevenLabs voice</strong>
+                  <strong>Timed short-phrase captions synced to the synthesized voice</strong>
                   <p>
                     The caption track is now built from the synthesized voice timing, not from a
                     rough duration estimate. The hook below is kept for the node summary and as the
@@ -3607,7 +3902,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
               <div>
                 <span className="brainrot-surface__eyebrow">Output</span>
                 <h2>Rendered reel</h2>
-                <p>Preview the final Cloudinary output with the AI voiceover baked in.</p>
+                <p>Preview the final Cloudinary output with the AI voice baked in.</p>
               </div>
               <span
                 className={`brainrot-status-pill brainrot-status-pill--${
@@ -3651,15 +3946,38 @@ export function Feature2Page({ session }: Feature2PageProps) {
                 />
               ) : (
                 <div className="brainrot-empty-state brainrot-empty-state--tall">
-                  Run the graph to generate the AI voiceover reel.
+                  Run the graph to generate the AI reel.
                 </div>
               )}
             </div>
 
+            {generatedRenders.length > 1 ? (
+              <div className="brainrot-render-picker">
+                {generatedRenders.map((render, index) => (
+                  <button
+                    key={render.id}
+                    className={`brainrot-render-chip ${
+                      index === selectedGeneratedRenderIndex ? 'brainrot-render-chip--active' : ''
+                    }`}
+                    type="button"
+                    onClick={() => setSelectedGeneratedRenderIndex(index)}
+                  >
+                    <span>{render.label}</span>
+                    <strong>{render.script.title}</strong>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
             <div className="brainrot-mini-grid">
               <div className="brainrot-mini-card">
                 <span>Voice</span>
-                <strong>{generatedRender?.voiceName ?? selectedVoice.name}</strong>
+                <strong>
+                  {generatedRender?.voiceName ?? selectedVoice.name}
+                  {generatedRender
+                    ? ` • ${generatedRender.voiceProvider === 'google-ai' ? 'Google AI' : 'ElevenLabs'}`
+                    : ''}
+                </strong>
               </div>
               <div className="brainrot-mini-card">
                 <span>Duration</span>
@@ -3668,6 +3986,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
               <div className="brainrot-mini-card">
                 <span>Gameplay</span>
                 <strong>{generatedRender?.gameplayLabel ?? gameplayAsset?.label ?? selectedGameplayPreset.label}</strong>
+              </div>
+              <div className="brainrot-mini-card">
+                <span>Batch</span>
+                <strong>{generatedRenders.length || batchSettings.videoCount} output(s)</strong>
               </div>
             </div>
 
@@ -3732,8 +4054,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
               <div className="brainrot-asset-card">
                 <span>Current script</span>
-                <strong>{lastGeneratedScript?.title ?? 'Waiting for Gemini'}</strong>
-                <p>{(scriptDraft || 'No script yet.').slice(0, 220)}</p>
+                <strong>{activeScript?.title ?? 'Waiting for Gemini'}</strong>
+                <p>{(activeScript?.spokenScript || scriptDraft || 'No script yet.').slice(0, 220)}</p>
               </div>
 
               <div className="brainrot-asset-card">
@@ -3759,17 +4081,21 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
               <div className="brainrot-asset-card">
                 <span>Voice asset</span>
-                <strong>{voiceAsset?.label ?? 'Waiting for ElevenLabs'}</strong>
-                <p>{voiceAsset ? `${selectedVoice.name} • ${formatDuration(voiceAsset.duration)}` : 'The synthesized voice track will appear here after the next run.'}</p>
-                {voiceAsset ? <audio controls preload="none" src={voiceAsset.secureUrl} /> : null}
+                <strong>{activeVoiceAsset?.label ?? 'Waiting for AI voice'}</strong>
+                <p>
+                  {activeVoiceAsset
+                    ? `${generatedRender?.voiceName ?? selectedVoice.name} • ${formatDuration(activeVoiceAsset.duration)}`
+                    : 'The synthesized voice track will appear here after the next run.'}
+                </p>
+                {activeVoiceAsset ? <audio controls preload="none" src={activeVoiceAsset.secureUrl} /> : null}
               </div>
 
               <div className="brainrot-asset-card">
                 <span>Caption track</span>
-                <strong>{subtitleAsset?.label ?? 'Waiting for timed captions'}</strong>
+                <strong>{activeSubtitleAsset?.label ?? 'Waiting for timed captions'}</strong>
                 <p>
-                  {subtitleAsset
-                    ? `${subtitleAsset.cueCount} cues uploaded to Cloudinary for burn-in.`
+                  {activeSubtitleAsset
+                    ? `${activeSubtitleAsset.cueCount} cues uploaded to Cloudinary for burn-in.`
                     : 'The next run will generate a timed SRT from the Gemini script.'}
                 </p>
               </div>
@@ -3833,6 +4159,59 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   placeholder="Tell Gemini how to pace the narration, what tone to hit, and what to avoid."
                 />
               </label>
+
+              <div className="brainrot-mini-grid">
+                <label className="brainrot-form-field">
+                  <span>Video count</span>
+                  <select
+                    value={runBatchSettingsDraft.videoCount}
+                    onChange={(event) =>
+                      setRunBatchSettingsDraft((current) => ({
+                        ...current,
+                        videoCount: normalizeBatchVideoCount(Number(event.target.value)),
+                      }))
+                    }
+                  >
+                    {[1, 2, 3, 4].map((count) => (
+                      <option key={count} value={count}>
+                        {count}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="brainrot-form-field">
+                  <span>Script mode</span>
+                  <select
+                    value={runBatchSettingsDraft.scriptVariationMode}
+                    onChange={(event) =>
+                      setRunBatchSettingsDraft((current) => ({
+                        ...current,
+                        scriptVariationMode: event.target.value as ScriptVariationMode,
+                      }))
+                    }
+                  >
+                    <option value="different-scripts">Different scripts</option>
+                    <option value="same-script">Same script</option>
+                  </select>
+                </label>
+
+                <label className="brainrot-form-field">
+                  <span>Part labels</span>
+                  <select
+                    value={runBatchSettingsDraft.partLabelsEnabled ? 'enabled' : 'disabled'}
+                    onChange={(event) =>
+                      setRunBatchSettingsDraft((current) => ({
+                        ...current,
+                        partLabelsEnabled: event.target.value === 'enabled',
+                      }))
+                    }
+                  >
+                    <option value="disabled">Off</option>
+                    <option value="enabled">Show Part 1 / Part 2</option>
+                  </select>
+                </label>
+              </div>
 
               <div className="brainrot-static-card">
                 <span>Live Gemini prompt preview</span>

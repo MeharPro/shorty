@@ -47,6 +47,8 @@ export type BrainrotGameplayPresetId =
   | 'subway-finale'
   | 'satisfying-ice-cream'
   | 'satisfying-bubbles'
+  | 'satisfying-soap'
+  | 'satisfying-street-bubbles'
   | 'custom-remote';
 export type BrainrotCaptionPresetId =
   | 'signal-pop'
@@ -188,6 +190,8 @@ export interface BrainrotScriptPackage {
   hook: string;
   spokenScript: string;
   captionText: string;
+  introCardTitle: string;
+  introCardQuestion: string;
   visualNotes: string[];
 }
 
@@ -208,6 +212,7 @@ export interface BrainrotVoiceResponse {
   voiceId: string;
   alignment?: BrainrotVoiceAlignment | null;
   generatedAt: string;
+  warning?: string;
 }
 
 export interface BrainrotVoicesResponse {
@@ -365,6 +370,28 @@ export const BRAINROT_GAMEPLAY_PRESETS: BrainrotGameplayPreset[] = [
     duration: 10,
   },
   {
+    id: 'satisfying-soap',
+    label: 'Foam Soap',
+    tag: 'Clean',
+    description: 'Close-up foam soap visuals for a glossy, repetitive satisfying background.',
+    source: 'remote',
+    defaultOffset: 0,
+    defaultGravity: 'center',
+    remoteUrl: 'https://coverr.co/videos/washing-hands-with-foam-soap-cK81mJE55e',
+    duration: 11,
+  },
+  {
+    id: 'satisfying-street-bubbles',
+    label: 'Street Bubbles',
+    tag: 'Float',
+    description: 'Colorful floating bubbles with a softer satisfying motion profile.',
+    source: 'remote',
+    defaultOffset: 0,
+    defaultGravity: 'center',
+    remoteUrl: 'https://coverr.co/videos/bubbles-on-the-street-KPO5zy95Pg',
+    duration: 12,
+  },
+  {
     id: 'custom-remote',
     label: 'Custom Remote',
     tag: 'URL',
@@ -513,10 +540,14 @@ export const BRAINROT_CAPTION_STYLE_PRESETS: BrainrotCaptionStylePreset[] = [
 ];
 
 export const FALLBACK_BRAINROT_VOICE: BrainrotVoiceOption = {
-  id: '21m00Tcm4TlvDq8ikWAM',
-  name: 'Rachel',
-  category: 'premade',
-  labels: {},
+  id: 'google:Kore',
+  name: 'Kore',
+  category: 'google-ai',
+  labels: {
+    descriptive: 'firm',
+    use_case: 'story',
+    gender: 'female',
+  },
   previewUrl: '',
 };
 
@@ -778,11 +809,11 @@ export function buildBrainrotRunPlan({
 }) {
   return [
     `Style: ${buildTypeLabel(brainrotType)} prompt turned into a short-form script`,
-    `Voiceover: ${voiceLabel} via ElevenLabs for ${durationSeconds.toFixed(1)}s`,
+    `Voiceover: ${voiceLabel} for ${durationSeconds.toFixed(1)}s`,
     `Gameplay bed: ${gameplayLabel || 'Selected gameplay'} trimmed, muted, and filled edge-to-edge`,
     `Layout: gameplay fills the full 9:16 frame with ${layoutStyle.gameplayGravity} crop focus`,
     introCard?.enabled
-      ? `Intro: rounded story post card shown solo for ${INTRO_CARD_DURATION_SECONDS.toFixed(1)}s before narration starts`
+      ? `Intro: rounded story post card shown for the first ${INTRO_CARD_DURATION_SECONDS.toFixed(1)}s while narration stays in sync underneath`
       : 'Intro: no opening card overlay',
     timedCaptions
       ? `Captions: timed script-synced subtitles in ${captionStyle.fontFamily} ${captionStyle.fontSize}px at x ${captionStyle.horizontalOffset}px / y ${captionStyle.verticalOffset}px`
@@ -900,6 +931,11 @@ export async function generateBrainrotScript(input: {
   brainrotType: BrainrotTypeId;
   scriptGuidance?: string;
   targetDurationSeconds?: number;
+  variationIndex?: number;
+  variationCount?: number;
+  partLabel?: string;
+  previousTitles?: string[];
+  previousHooks?: string[];
 }) {
   const response = await fetch('/api/brainrot-script', {
     method: 'POST',

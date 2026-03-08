@@ -3,10 +3,13 @@ import {
   buildCloudinaryDeliveryUrl,
   uploadBufferToCloudinary,
 } from '../lib/brainrotPipeline.js';
+import { isDirectVideoUrl, resolveGameplayUrl } from '../lib/gameplayResolver.js';
 
 const PRESET_PUBLIC_IDS = {
   'satisfying-ice-cream': 'shorty/brainrot/remote-gameplay/satisfying-ice-cream',
   'satisfying-bubbles': 'shorty/brainrot/remote-gameplay/satisfying-bubbles',
+  'satisfying-soap': 'shorty/brainrot/remote-gameplay/satisfying-soap',
+  'satisfying-street-bubbles': 'shorty/brainrot/remote-gameplay/satisfying-street-bubbles',
 };
 
 function normalizeBody(body) {
@@ -65,11 +68,15 @@ export default async function handler(req, res) {
       return;
     }
 
+    const resolvedRemote =
+      isDirectVideoUrl(remoteUrl) ? { resolvedUrl: remoteUrl } : await resolveGameplayUrl(remoteUrl);
+    const resolvedUrl = resolvedRemote.resolvedUrl || remoteUrl;
+
     const publicId =
       PRESET_PUBLIC_IDS[presetId] ||
       `shorty/brainrot/remote-gameplay/${crypto
         .createHash('sha1')
-        .update(remoteUrl)
+        .update(resolvedUrl)
         .digest('hex')
         .slice(0, 24)}`;
     const canonicalUrl = buildCloudinaryDeliveryUrl(cloudName, publicId);
@@ -77,14 +84,14 @@ export default async function handler(req, res) {
     let upload = null;
 
     if (!cached) {
-      const remoteResponse = await fetch(remoteUrl);
+      const remoteResponse = await fetch(resolvedUrl);
 
       if (!remoteResponse.ok) {
         throw new Error(`Failed to download the remote gameplay clip (${remoteResponse.status}).`);
       }
 
       const contentType = remoteResponse.headers.get('content-type') || 'video/mp4';
-      const extension = inferExtension(contentType, remoteUrl);
+      const extension = inferExtension(contentType, resolvedUrl);
       const buffer = Buffer.from(await remoteResponse.arrayBuffer());
 
       upload = await uploadBufferToCloudinary({
