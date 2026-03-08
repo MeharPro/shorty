@@ -289,6 +289,7 @@ export interface BrainrotSavedRender {
   captionText: string;
   audioAsset: BrainrotAudioAsset;
   subtitleAsset: BrainrotSubtitleAsset | null;
+  selectedVoiceId?: string;
   voiceName: string;
   voiceProvider: string;
   selectedGameplayPresetId?: BrainrotGameplayPresetId;
@@ -306,6 +307,7 @@ export interface BrainrotHistoryEntry {
   brainrotType: BrainrotTypeId;
   targetDurationSeconds: number;
   selectedVoiceId: string;
+  variantVoiceIds?: string[];
   selectedGameplayPresetId: BrainrotGameplayPresetId;
   variantGameplayPresetIds?: BrainrotGameplayPresetId[];
   selectedCaptionPresetId: BrainrotCaptionPresetId;

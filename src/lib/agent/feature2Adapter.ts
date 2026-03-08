@@ -19,6 +19,13 @@ interface Feature2StageModelSnapshot {
   code: string;
 }
 
+interface Feature2VoiceSnapshot {
+  id: string;
+  name: string;
+  category: string;
+  gender?: string;
+}
+
 interface Feature2WorkflowSnapshot {
   selectedNodeId: string;
   canvasNodes: Feature2CanvasNodeSnapshot[];
@@ -31,9 +38,12 @@ interface Feature2WorkflowSnapshot {
   lastRunPrompt?: string;
   targetDurationSeconds: number;
   selectedVoiceId: string;
+  variantVoiceIds?: string[];
+  availableVoices?: Feature2VoiceSnapshot[];
   selectedGameplayPresetId: string;
   variantGameplayPresetIds?: string[];
   videoCount: number;
+  scriptVariationMode?: 'same-script' | 'different-scripts';
   renderState: string;
 }
 
@@ -89,6 +99,13 @@ export function buildFeature2WorkflowGraph(
             ...(node.id === 'voice'
               ? {
                   selectedVoiceId: snapshot.selectedVoiceId,
+                  variantVoiceIds: snapshot.variantVoiceIds ?? [],
+                  availableVoices: (snapshot.availableVoices ?? []).map((voice) => ({
+                    id: voice.id,
+                    name: voice.name,
+                    category: voice.category,
+                    gender: voice.gender ?? '',
+                  })),
                 }
               : {}),
             ...(node.id === 'gameplay'
@@ -176,6 +193,13 @@ export function buildFeature2WorkflowGraph(
       lastRunPrompt: truncateText(snapshot.lastRunPrompt, 220),
       targetDurationSeconds: snapshot.targetDurationSeconds,
       selectedVoiceId: snapshot.selectedVoiceId,
+      variantVoiceIds: snapshot.variantVoiceIds ?? [],
+      availableVoices: (snapshot.availableVoices ?? []).map((voice) => ({
+        id: voice.id,
+        name: voice.name,
+        category: voice.category,
+        gender: voice.gender ?? '',
+      })),
       selectedGameplayPresetId: snapshot.selectedGameplayPresetId,
       variantGameplayPresetIds: snapshot.variantGameplayPresetIds ?? [],
       availableGameplayPresets: BRAINROT_GAMEPLAY_PRESETS.map((preset) => ({
@@ -183,6 +207,7 @@ export function buildFeature2WorkflowGraph(
         label: preset.label,
       })),
       videoCount: snapshot.videoCount,
+      scriptVariationMode: snapshot.scriptVariationMode ?? 'different-scripts',
       renderState: snapshot.renderState,
     },
   };

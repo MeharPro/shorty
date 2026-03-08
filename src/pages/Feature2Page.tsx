@@ -323,6 +323,57 @@ function buildGameplayBatchPresetIds(
   return Array.from({ length: count }, (_, index) => normalized[index] ?? normalized[index % normalized.length]);
 }
 
+function normalizeVoiceIdValue(
+  voiceId: string | null | undefined,
+  voiceOptions: BrainrotVoiceOption[]
+): string {
+  const normalized = String(voiceId || '')
+    .trim()
+    .toLowerCase();
+
+  if (!normalized) {
+    return '';
+  }
+
+  const exactMatch = voiceOptions.find((voice) => voice.id.toLowerCase() === normalized);
+  if (exactMatch) {
+    return exactMatch.id;
+  }
+
+  const nameMatch = voiceOptions.find((voice) => voice.name.trim().toLowerCase() === normalized);
+  if (nameMatch) {
+    return nameMatch.id;
+  }
+
+  return voiceOptions.length ? '' : String(voiceId || '').trim();
+}
+
+function normalizeVariantVoiceIds(
+  voiceIds: unknown,
+  voiceOptions: BrainrotVoiceOption[],
+  fallbackVoiceId: string
+): string[] {
+  const normalized = Array.isArray(voiceIds)
+    ? voiceIds
+        .map((voiceId) => normalizeVoiceIdValue(String(voiceId || ''), voiceOptions))
+        .filter(Boolean)
+    : [];
+  const unique = [...new Set(normalized)];
+
+  return unique.length > 0 ? unique : [fallbackVoiceId];
+}
+
+function buildVoiceBatchIds(
+  voiceIds: string[],
+  videoCount: number,
+  fallbackVoiceId: string
+): string[] {
+  const normalized = normalizeVariantVoiceIds(voiceIds, [], fallbackVoiceId);
+  const count = normalizeBatchVideoCount(videoCount);
+
+  return Array.from({ length: count }, (_, index) => normalized[index] ?? normalized[index % normalized.length]);
+}
+
 function delay(ms: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -937,6 +988,7 @@ function createRunSignature(input: {
   brainrotType: BrainrotTypeId;
   targetDurationSeconds: number;
   selectedVoiceId: string;
+  variantVoiceIds: string[];
   selectedGameplayPresetId: BrainrotGameplayPresetId;
   variantGameplayPresetIds: BrainrotGameplayPresetId[];
   remoteGameplayUrl: string;
@@ -1139,6 +1191,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
   );
   const [voices, setVoices] = useState<BrainrotVoiceOption[]>([FALLBACK_BRAINROT_VOICE]);
   const [selectedVoiceId, setSelectedVoiceId] = useState(FALLBACK_BRAINROT_VOICE.id);
+  const [variantVoiceIds, setVariantVoiceIds] = useState<string[]>([FALLBACK_BRAINROT_VOICE.id]);
   const [voiceFilterMode, setVoiceFilterMode] = useState<VoiceFilterMode>('expressive-female');
   const [voiceSearchInput, setVoiceSearchInput] = useState('');
   const [isVoicesLoading, setIsVoicesLoading] = useState(true);
@@ -1344,6 +1397,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
     brainrotType,
     targetDurationSeconds,
     selectedVoiceId,
+    variantVoiceIds,
     selectedGameplayPresetId,
     variantGameplayPresetIds,
     remoteGameplayUrl,
@@ -1530,9 +1584,13 @@ export function Feature2Page({ session }: Feature2PageProps) {
       const response = await fetchBrainrotVoices();
       const rankedVoices = sortVoicesByRecommendation(response.voices, preferredVoiceGender);
       const recommendedVoiceId = pickRecommendedVoiceId(rankedVoices, preferredVoiceGender);
+      const retainedSelectedVoiceId = rankedVoices.some((voice) => voice.id === selectedVoiceId)
+        ? selectedVoiceId
+        : recommendedVoiceId;
       setVoices(rankedVoices);
-      setSelectedVoiceId((current) =>
-        rankedVoices.some((voice) => voice.id === current) ? current : recommendedVoiceId
+      setSelectedVoiceId(retainedSelectedVoiceId);
+      setVariantVoiceIds((current) =>
+        normalizeVariantVoiceIds(current, rankedVoices, retainedSelectedVoiceId)
       );
       setVoicesWarning(response.warning || '');
       appendLog(
@@ -1544,6 +1602,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
     } catch (error) {
       setVoices([FALLBACK_BRAINROT_VOICE]);
       setSelectedVoiceId(FALLBACK_BRAINROT_VOICE.id);
+      setVariantVoiceIds([FALLBACK_BRAINROT_VOICE.id]);
       setVoicesWarning(error instanceof Error ? error.message : 'Failed to load voices.');
       appendLog(
         error instanceof Error ? error.message : 'Failed to load voices. Using fallback.',
@@ -2248,13 +2307,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
     setIsIntroCardTitleManual(false);
     setIsIntroCardQuestionManual(false);
     setVoiceFilterMode(nextVoiceFilterMode);
-    setSelectedVoiceId((current) => {
-      if (voices.some((voice) => voice.id === current)) {
-        return pickRecommendedVoiceId(voices, template.preferredVoiceGender);
-      }
-
-      return pickRecommendedVoiceId(voices, template.preferredVoiceGender);
-    });
+    {
+      const nextSelectedVoiceId = pickRecommendedVoiceId(voices, template.preferredVoiceGender);
+      setSelectedVoiceId(nextSelectedVoiceId);
+      setVariantVoiceIds([nextSelectedVoiceId]);
+    }
 
     if (templateGameplayPreset.source === 'local') {
       if (!localGameplayAsset && !isPreparingGameplay) {
@@ -2293,19 +2350,23 @@ export function Feature2Page({ session }: Feature2PageProps) {
     if (isBuiltInRemoteGameplayPreset(preset)) {
       setSelectedTemplateId('satisfying-template');
       setVoiceFilterMode('expressive-female');
-      setSelectedVoiceId((current) =>
-        voices.some((voice) => voice.id === current)
+      {
+        const nextSelectedVoiceId = voices.some((voice) => voice.id === selectedVoiceId)
           ? pickRecommendedVoiceId(voices, 'female')
-          : FALLBACK_BRAINROT_VOICE.id
-      );
+          : FALLBACK_BRAINROT_VOICE.id;
+        setSelectedVoiceId(nextSelectedVoiceId);
+        setVariantVoiceIds([nextSelectedVoiceId]);
+      }
     } else if (isStoryGameplayPresetId(preset.id)) {
       setSelectedTemplateId('subway-template');
       setVoiceFilterMode('expressive-female');
-      setSelectedVoiceId((current) =>
-        voices.some((voice) => voice.id === current)
+      {
+        const nextSelectedVoiceId = voices.some((voice) => voice.id === selectedVoiceId)
           ? pickRecommendedVoiceId(voices, 'female')
-          : FALLBACK_BRAINROT_VOICE.id
-      );
+          : FALLBACK_BRAINROT_VOICE.id;
+        setSelectedVoiceId(nextSelectedVoiceId);
+        setVariantVoiceIds([nextSelectedVoiceId]);
+      }
     }
 
     setStatusMessage(`${preset.label} is now armed for the gameplay node.`);
@@ -2528,6 +2589,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
       effectiveBatchSettings.videoCount,
       selectedGameplayPresetId
     );
+    const effectiveVoiceIds = buildVoiceBatchIds(
+      variantVoiceIds,
+      effectiveBatchSettings.videoCount,
+      selectedVoiceId
+    );
     const effectiveGameplayPresets = effectiveGameplayPresetIds.map((presetId) =>
       findGameplayPreset(presetId)
     );
@@ -2559,6 +2625,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
     setPromptInput(effectivePromptInput);
     setScriptGuidance(effectiveScriptGuidance);
     setBatchSettings(effectiveBatchSettings);
+    setVariantVoiceIds(effectiveVoiceIds);
     setRenderState('running');
     setSubtitleAsset(null);
     setGeneratedRenders([]);
@@ -2574,6 +2641,14 @@ export function Feature2Page({ session }: Feature2PageProps) {
         'info'
       );
     }
+    if (new Set(effectiveVoiceIds).size > 1) {
+      appendLog(
+        `Voice router armed for ${effectiveVoiceIds
+          .map((voiceId) => voices.find((voice) => voice.id === voiceId)?.name || voiceId)
+          .join(', ')}.`,
+        'info'
+      );
+    }
 
     try {
       const nextGeneratedRenders: GeneratedRender[] = [];
@@ -2582,9 +2657,9 @@ export function Feature2Page({ session }: Feature2PageProps) {
         manualScriptMode || effectiveBatchSettings.scriptVariationMode === 'same-script';
       const gameplayAssetCache = new Map<BrainrotGameplayPresetId, MediaAsset>();
       let cachedScript: BrainrotScriptPackage | null = null;
-      let cachedVoiceResponse: BrainrotVoiceResponse | null = null;
-      let cachedSubtitleAsset: BrainrotSubtitleAsset | null = null;
-      let cachedClipDuration: number | null = null;
+      const cachedVoiceResponses = new Map<string, BrainrotVoiceResponse>();
+      const cachedSubtitleAssets = new Map<string, BrainrotSubtitleAsset | null>();
+      const cachedClipDurations = new Map<string, number>();
 
       const primeLocalGameplayCache = (asset: MediaAsset) => {
         gameplayAssetCache.set('minecraft-gameplay', asset);
@@ -2680,6 +2755,12 @@ export function Feature2Page({ session }: Feature2PageProps) {
           batchGameplayPreset.id === selectedGameplayPresetId
             ? safeGameplayOffset
             : Math.max(0, batchGameplayPreset.defaultOffset);
+        const batchVoiceId = effectiveVoiceIds[index] ?? selectedVoiceId;
+        const batchSelectedVoice =
+          voices.find((voice) => voice.id === batchVoiceId) ??
+          voices.find((voice) => voice.id === selectedVoiceId) ??
+          FALLBACK_BRAINROT_VOICE;
+        const voiceCacheKey = shouldReuseScriptAssets ? batchSelectedVoice.id : `${batchSelectedVoice.id}:${index}`;
         const batchLayoutStyle =
           batchGameplayPreset.id === selectedGameplayPresetId
             ? layoutStyle
@@ -2758,13 +2839,17 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
         setActiveRunStage('voice');
         setSelectedNode('voice');
-        let voiceResponse: BrainrotVoiceResponse | null = cachedVoiceResponse;
+        let voiceResponse: BrainrotVoiceResponse | null =
+          shouldReuseScriptAssets ? cachedVoiceResponses.get(voiceCacheKey) ?? null : null;
 
-        if (!voiceResponse || !shouldReuseScriptAssets) {
-          appendLog(`${batchPrefix}Sending the script to the AI voice node "${selectedVoice.name}".`, 'info');
+        if (!voiceResponse) {
+          appendLog(
+            `${batchPrefix}Sending the script to the AI voice node "${batchSelectedVoice.name}".`,
+            'info'
+          );
           voiceResponse = await synthesizeBrainrotVoice({
             text: effectiveScript.spokenScript,
-            voiceId: selectedVoiceId,
+            voiceId: batchSelectedVoice.id,
             voiceSettings,
             seed: buildAssetSeed(brainrotType, `${effectiveScript.title} ${renderLabel}`),
           });
@@ -2782,7 +2867,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
           );
 
           if (shouldReuseScriptAssets) {
-            cachedVoiceResponse = voiceResponse;
+            cachedVoiceResponses.set(voiceCacheKey, voiceResponse);
           }
         } else {
           appendLog(`${batchPrefix}Reusing the existing voice track for ${renderLabel}.`, 'info');
@@ -2826,12 +2911,12 @@ export function Feature2Page({ session }: Feature2PageProps) {
         }
 
         const clipDuration: number =
-          cachedClipDuration && shouldReuseScriptAssets
-            ? cachedClipDuration
+          shouldReuseScriptAssets && cachedClipDurations.has(voiceCacheKey)
+            ? cachedClipDurations.get(voiceCacheKey) ?? targetDurationSeconds
             : resolveRenderDurationSeconds(measuredVoiceDuration, targetDurationSeconds);
 
-        if (shouldReuseScriptAssets && !cachedClipDuration) {
-          cachedClipDuration = clipDuration;
+        if (shouldReuseScriptAssets && !cachedClipDurations.has(voiceCacheKey)) {
+          cachedClipDurations.set(voiceCacheKey, clipDuration);
         }
 
         const safeLoopOffset = ensuredGameplay.duration
@@ -2846,7 +2931,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
         setActiveRunStage('caption');
         setSelectedNode('caption');
         let nextSubtitleAsset: BrainrotSubtitleAsset | null = shouldReuseScriptAssets
-          ? cachedSubtitleAsset
+          ? cachedSubtitleAssets.get(voiceCacheKey) ?? null
           : null;
 
         if (!nextSubtitleAsset) {
@@ -2880,7 +2965,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
           }
 
           if (shouldReuseScriptAssets) {
-            cachedSubtitleAsset = nextSubtitleAsset;
+            cachedSubtitleAssets.set(voiceCacheKey, nextSubtitleAsset);
           }
         } else {
           setSubtitleAsset(nextSubtitleAsset);
@@ -2933,7 +3018,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
           voiceResponse.provider === 'google-ai' ? 'Google AI' : 'ElevenLabs';
         const plan = buildBrainrotRunPlan({
           brainrotType,
-          voiceLabel: `${selectedVoice.name} via ${voiceProviderLabel}`,
+          voiceLabel: `${batchSelectedVoice.name} via ${voiceProviderLabel}`,
           gameplayLabel: batchGameplayPreset.label,
           captionText: effectiveCaption,
           captionStyle,
@@ -2956,7 +3041,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
           captionText: effectiveCaption,
           audioAsset: voiceResponse.audioAsset,
           subtitleAsset: nextSubtitleAsset,
-          voiceName: selectedVoice.name,
+          selectedVoiceId: batchSelectedVoice.id,
+          voiceName: batchSelectedVoice.name,
           voiceProvider: voiceResponse.provider,
           selectedGameplayPresetId: batchGameplayPreset.id,
           gameplayLabel: batchGameplayPreset.label,
@@ -2987,6 +3073,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
         brainrotType,
         targetDurationSeconds,
         selectedVoiceId,
+        variantVoiceIds: effectiveVoiceIds,
         selectedGameplayPresetId,
         variantGameplayPresetIds: effectiveGameplayPresetIds,
         remoteGameplayUrl,
@@ -3016,6 +3103,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
         brainrotType,
         targetDurationSeconds,
         selectedVoiceId,
+        variantVoiceIds: effectiveVoiceIds,
         selectedGameplayPresetId,
         variantGameplayPresetIds: effectiveGameplayPresetIds,
         selectedCaptionPresetId,
@@ -3095,13 +3183,22 @@ export function Feature2Page({ session }: Feature2PageProps) {
         lastRunPrompt: savedRuns[0]?.prompt || '',
         targetDurationSeconds,
         selectedVoiceId,
+        variantVoiceIds,
+        availableVoices: voices.slice(0, 16).map((voice) => ({
+          id: voice.id,
+          name: voice.name,
+          category: voice.category,
+          gender: readVoiceLabel(voice, 'gender'),
+        })),
         selectedGameplayPresetId,
         variantGameplayPresetIds,
         videoCount: batchSettings.videoCount,
+        scriptVariationMode: batchSettings.scriptVariationMode,
         renderState,
       }),
     [
       batchSettings.videoCount,
+      batchSettings.scriptVariationMode,
       canvasNodes,
       captionText,
       coreFlowModels,
@@ -3113,10 +3210,12 @@ export function Feature2Page({ session }: Feature2PageProps) {
       scriptDraft,
       scriptGuidance,
       selectedGameplayPresetId,
+      variantVoiceIds,
       variantGameplayPresetIds,
       selectedNode,
       selectedVoiceId,
       targetDurationSeconds,
+      voices,
     ]
   );
 
@@ -3161,6 +3260,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       let nextSelectedTemplateId = selectedTemplateId;
       let nextVoiceFilterMode = voiceFilterMode;
       let nextSelectedVoiceId = selectedVoiceId;
+      let nextVariantVoiceIds = [...variantVoiceIds];
       let nextSelectedGameplayPresetId = selectedGameplayPresetId;
       let nextVariantGameplayPresetIds = [...variantGameplayPresetIds];
       let nextGameplayStartOffset = gameplayStartOffset;
@@ -3300,6 +3400,16 @@ export function Feature2Page({ session }: Feature2PageProps) {
         }
 
         if (action.type === 'update_node_params' && action.targetNodeId === 'voice') {
+          const requestedSelectedVoiceId =
+            typeof action.params?.selectedVoiceId === 'string'
+              ? normalizeVoiceIdValue(action.params.selectedVoiceId, voices)
+              : '';
+          const requestedVariantVoiceIds = normalizeVariantVoiceIds(
+            action.params?.variantVoiceIds ?? action.params?.voiceIds,
+            voices,
+            requestedSelectedVoiceId || nextSelectedVoiceId
+          );
+
           if (
             action.params?.voiceFilterMode === 'recommended' ||
             action.params?.voiceFilterMode === 'expressive-female' ||
@@ -3310,21 +3420,37 @@ export function Feature2Page({ session }: Feature2PageProps) {
             nextVoiceFilterMode = action.params.voiceFilterMode;
           }
 
-          if (typeof action.params?.selectedVoiceId === 'string') {
-            const voiceExists = voices.some((voice) => voice.id === action.params?.selectedVoiceId);
-            if (voiceExists) {
-              nextSelectedVoiceId = action.params.selectedVoiceId;
-            }
+          if (requestedSelectedVoiceId) {
+            nextSelectedVoiceId = requestedSelectedVoiceId;
+            nextVariantVoiceIds = [requestedSelectedVoiceId];
           }
 
           if (action.params?.voicePreference === 'female') {
             nextVoiceFilterMode = 'expressive-female';
             nextSelectedVoiceId = pickRecommendedVoiceId(voices, 'female');
+            nextVariantVoiceIds = [nextSelectedVoiceId];
           }
 
           if (action.params?.voicePreference === 'male') {
             nextVoiceFilterMode = 'expressive-male';
             nextSelectedVoiceId = pickRecommendedVoiceId(voices, 'male');
+            nextVariantVoiceIds = [nextSelectedVoiceId];
+          }
+
+          if (requestedVariantVoiceIds.length > 1) {
+            nextVariantVoiceIds = requestedVariantVoiceIds;
+            nextSelectedVoiceId = requestedVariantVoiceIds[0];
+            nextSelectedNode = 'voice';
+            nextBatchSettings = {
+              ...nextBatchSettings,
+              videoCount: normalizeBatchVideoCount(
+                Math.max(nextBatchSettings.videoCount, requestedVariantVoiceIds.length)
+              ),
+              partLabelsEnabled: true,
+            };
+          } else if (requestedVariantVoiceIds.length === 1 && !requestedSelectedVoiceId) {
+            nextVariantVoiceIds = requestedVariantVoiceIds;
+            nextSelectedVoiceId = requestedVariantVoiceIds[0];
           }
 
           return;
@@ -3375,12 +3501,18 @@ export function Feature2Page({ session }: Feature2PageProps) {
               nextSelectedVoiceId = voices.some((voice) => voice.id === nextSelectedVoiceId)
                 ? pickRecommendedVoiceId(voices, 'female')
                 : FALLBACK_BRAINROT_VOICE.id;
+              if (nextVariantVoiceIds.length <= 1) {
+                nextVariantVoiceIds = [nextSelectedVoiceId];
+              }
             } else if (isStoryGameplayPresetId(requestedPreset.id)) {
               nextSelectedTemplateId = 'subway-template';
               nextVoiceFilterMode = 'expressive-female';
               nextSelectedVoiceId = voices.some((voice) => voice.id === nextSelectedVoiceId)
                 ? pickRecommendedVoiceId(voices, 'female')
                 : FALLBACK_BRAINROT_VOICE.id;
+              if (nextVariantVoiceIds.length <= 1) {
+                nextVariantVoiceIds = [nextSelectedVoiceId];
+              }
             }
 
             if (nextVariantGameplayPresetIds.length > 1) {
@@ -3481,6 +3613,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       scriptGuidance,
       selectedNode,
       selectedGameplayPresetId,
+      variantVoiceIds,
       variantGameplayPresetIds,
       selectedTemplateId,
       selectedVoiceId,
@@ -4035,7 +4168,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
                           selectedVoiceId === voice.id ? 'brainrot-quick-chip--active' : ''
                         }`}
                         type="button"
-                        onClick={() => setSelectedVoiceId(voice.id)}
+                        onClick={() => {
+                          setSelectedVoiceId(voice.id);
+                          setVariantVoiceIds([voice.id]);
+                        }}
                       >
                         {voice.name}
                       </button>
@@ -4051,7 +4187,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
                         selectedVoiceId === voice.id ? 'brainrot-selection-card--active' : ''
                       }`}
                       type="button"
-                      onClick={() => setSelectedVoiceId(voice.id)}
+                      onClick={() => {
+                        setSelectedVoiceId(voice.id);
+                        setVariantVoiceIds([voice.id]);
+                      }}
                     >
                       <div className="brainrot-selection-card__meta">
                         <span>{voice.category}</span>
