@@ -10,6 +10,7 @@ const DEFAULT_ELEVEN_MODEL = 'eleven_multilingual_v2';
 const DEFAULT_ELEVEN_VOICE_ID = '21m00Tcm4TlvDq8ikWAM';
 const DEFAULT_GOOGLE_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 const DEFAULT_GOOGLE_VOICE = 'Kore';
+const GOOGLE_FALLBACK_VOICES = ['Kore', 'Puck', 'Charon', 'Leda', 'Aoede', 'Fenrir'];
 const GOOGLE_PCM_SAMPLE_RATE = 24000;
 const PCM_BITS_PER_SAMPLE = 16;
 const PCM_CHANNELS = 1;
@@ -50,6 +51,23 @@ function normalizeGoogleVoiceId(value) {
 
 function isGoogleVoiceId(value) {
   return /^google:/i.test(cleanText(value));
+}
+
+function selectGoogleFallbackVoice(value) {
+  const normalized = normalizeGoogleVoiceId(value);
+
+  if (isGoogleVoiceId(value)) {
+    return normalized;
+  }
+
+  const seed = cleanText(value) || DEFAULT_GOOGLE_VOICE;
+  let hash = 0;
+
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
+  }
+
+  return GOOGLE_FALLBACK_VOICES[hash % GOOGLE_FALLBACK_VOICES.length] || DEFAULT_GOOGLE_VOICE;
 }
 
 function buildWordTimings(alignment) {
@@ -507,7 +525,7 @@ export default async function handler(req, res) {
           apiKey: googleApiKey,
           modelId: googleTtsModelId,
           text,
-          voiceId: `google:${DEFAULT_GOOGLE_VOICE}`,
+          voiceId: `google:${selectGoogleFallbackVoice(voiceId)}`,
           voiceSettings,
           seed,
           cloudName,
@@ -525,7 +543,7 @@ export default async function handler(req, res) {
         apiKey: googleApiKey,
         modelId: googleTtsModelId,
         text,
-        voiceId: `google:${DEFAULT_GOOGLE_VOICE}`,
+        voiceId: `google:${selectGoogleFallbackVoice(voiceId)}`,
         voiceSettings,
         seed,
         cloudName,

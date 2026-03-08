@@ -374,6 +374,24 @@ function buildVoiceBatchIds(
   return Array.from({ length: count }, (_, index) => normalized[index] ?? normalized[index % normalized.length]);
 }
 
+function formatResolvedVoiceName(
+  voiceId: string,
+  voiceOptions: BrainrotVoiceOption[],
+  fallbackName: string
+) {
+  const directMatch = voiceOptions.find((voice) => voice.id === voiceId);
+
+  if (directMatch) {
+    return directMatch.name;
+  }
+
+  if (/^google:/i.test(voiceId)) {
+    return voiceId.replace(/^google:/i, '').trim() || fallbackName;
+  }
+
+  return fallbackName;
+}
+
 function delay(ms: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -2859,8 +2877,14 @@ export function Feature2Page({ session }: Feature2PageProps) {
             appendLog(voiceResponse.warning, 'warn');
           }
 
+          const resolvedVoiceName = formatResolvedVoiceName(
+            voiceResponse.voiceId,
+            voices,
+            batchSelectedVoice.name
+          );
+
           appendLog(
-            `${batchPrefix}Voice node complete via ${voiceResponse.provider} at ${formatDuration(
+            `${batchPrefix}Voice node complete with ${resolvedVoiceName} via ${voiceResponse.provider} at ${formatDuration(
               voiceResponse.durationSeconds
             )}.`,
             'success'
@@ -3016,9 +3040,14 @@ export function Feature2Page({ session }: Feature2PageProps) {
         const posterUrl = buildBrainrotCompositePosterUrl(compositeOptions);
         const voiceProviderLabel =
           voiceResponse.provider === 'google-ai' ? 'Google AI' : 'ElevenLabs';
+        const resolvedVoiceName = formatResolvedVoiceName(
+          voiceResponse.voiceId,
+          voices,
+          batchSelectedVoice.name
+        );
         const plan = buildBrainrotRunPlan({
           brainrotType,
-          voiceLabel: `${batchSelectedVoice.name} via ${voiceProviderLabel}`,
+          voiceLabel: `${resolvedVoiceName} via ${voiceProviderLabel}`,
           gameplayLabel: batchGameplayPreset.label,
           captionText: effectiveCaption,
           captionStyle,
@@ -3041,8 +3070,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
           captionText: effectiveCaption,
           audioAsset: voiceResponse.audioAsset,
           subtitleAsset: nextSubtitleAsset,
-          selectedVoiceId: batchSelectedVoice.id,
-          voiceName: batchSelectedVoice.name,
+          selectedVoiceId: voiceResponse.voiceId,
+          voiceName: resolvedVoiceName,
           voiceProvider: voiceResponse.provider,
           selectedGameplayPresetId: batchGameplayPreset.id,
           gameplayLabel: batchGameplayPreset.label,
