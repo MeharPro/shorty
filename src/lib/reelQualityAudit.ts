@@ -13,6 +13,22 @@ function speakerScore(face: FaceBox): number {
   return face.speakingScore * 0.52 + face.mouthOpenScore * 0.28 + face.confidence * 0.2;
 }
 
+function collectUniqueUrls(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+
+  for (const value of values) {
+    if (!value || seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    urls.push(value);
+  }
+
+  return urls;
+}
+
 function waitForEvent(target: HTMLVideoElement, eventName: 'loadedmetadata' | 'seeked'): Promise<void> {
   return new Promise((resolve, reject) => {
     const handleSuccess = () => {
@@ -35,20 +51,32 @@ function waitForEvent(target: HTMLVideoElement, eventName: 'loadedmetadata' | 's
   });
 }
 
-async function loadVideo(src: string): Promise<HTMLVideoElement> {
-  const video = document.createElement('video');
-  video.preload = 'auto';
-  video.crossOrigin = 'anonymous';
-  video.muted = true;
-  video.playsInline = true;
-  video.src = src;
+async function loadVideo(sources: string[]): Promise<HTMLVideoElement> {
+  let lastError: Error | null = null;
 
-  if (video.readyState >= 1) {
-    return video;
+  for (const src of sources) {
+    const video = document.createElement('video');
+    video.preload = 'auto';
+    video.crossOrigin = 'anonymous';
+    video.muted = true;
+    video.playsInline = true;
+    video.src = src;
+
+    try {
+      if (video.readyState < 1) {
+        await waitForEvent(video, 'loadedmetadata');
+      }
+
+      return video;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('Video could not be loaded for reel QA.');
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    }
   }
 
-  await waitForEvent(video, 'loadedmetadata');
-  return video;
+  throw lastError || new Error('Video could not be loaded for reel QA.');
 }
 
 async function seekVideo(video: HTMLVideoElement, time: number): Promise<void> {
@@ -91,7 +119,9 @@ export async function auditReelClip(
     clip.duration * ((index + 1) / (sampleCount + 1))
   );
 
-  const video = await loadVideo(clip.previewUrl || clip.deliveryUrl);
+  const video = await loadVideo(
+    collectUniqueUrls([clip.deliveryUrl, clip.previewUrl, clip.aiPreviewUrl, clip.downloadUrl])
+  );
   let framesWithFaces = 0;
   let visibleSpeakerFrames = 0;
   const notes = new Set<string>();

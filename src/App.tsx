@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AuthPage } from './pages/AuthPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -13,8 +13,26 @@ import {
 } from './lib/session';
 import './App.css';
 
+type ThemeMode = 'light' | 'dark';
+
+const THEME_STORAGE_KEY = 'shorty-theme-mode';
+
+function loadThemePreference(): ThemeMode {
+  if (typeof window === 'undefined') {
+    return 'light';
+  }
+
+  const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  if (savedTheme === 'light' || savedTheme === 'dark') {
+    return savedTheme;
+  }
+
+  return 'light';
+}
+
 function App() {
   const [session, setSession] = useState<ShortySession | null>(() => loadSession());
+  const [theme, setTheme] = useState<ThemeMode>(() => loadThemePreference());
 
   const handleAuth = (nextSession: ShortySession) => {
     saveSession(nextSession);
@@ -26,16 +44,36 @@ function App() {
     setSession(null);
   };
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
+  const nextTheme = theme === 'dark' ? 'light' : 'dark';
+
   return (
-    <Routes>
-      <Route path="/" element={<LandingPage />} />
-      <Route path="/app" element={<DashboardPage session={session} onLogout={handleLogout} />} />
-      <Route path="/feature1" element={<Feature1Page session={session} />} />
-      <Route path="/feature2" element={<Feature2Page session={session} />} />
-      <Route path="/login" element={<AuthPage mode="login" onAuth={handleAuth} />} />
-      <Route path="/signup" element={<AuthPage mode="signup" onAuth={handleAuth} />} />
-      <Route path="*" element={<Navigate replace to="/" />} />
-    </Routes>
+    <div className="app-shell">
+      <button
+        aria-label={`Switch to ${nextTheme} mode`}
+        className="app-theme-toggle"
+        onClick={() => setTheme(nextTheme)}
+        type="button"
+      >
+        <span className="app-theme-toggle__eyebrow">Theme</span>
+        <strong className="app-theme-toggle__value">{theme === 'dark' ? 'Dark' : 'Light'}</strong>
+      </button>
+
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/app" element={<DashboardPage session={session} onLogout={handleLogout} />} />
+        <Route path="/feature1" element={<Feature1Page session={session} />} />
+        <Route path="/feature2" element={<Feature2Page session={session} />} />
+        <Route path="/login" element={<AuthPage mode="login" onAuth={handleAuth} />} />
+        <Route path="/signup" element={<AuthPage mode="signup" onAuth={handleAuth} />} />
+        <Route path="*" element={<Navigate replace to="/" />} />
+      </Routes>
+    </div>
   );
 }
 

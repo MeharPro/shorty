@@ -137,6 +137,22 @@ const GENERATE_STAGES = [
 
 const FEATURE1_VIDEO_UPLOAD_FORMATS = ['mp4', 'mov', 'm4v', 'webm'];
 
+function collectUniqueUrls(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+
+  for (const value of values) {
+    if (!value || seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    urls.push(value);
+  }
+
+  return urls;
+}
+
 const INITIAL_CORE_NODES: CoreFlowNode[] = [
   { id: 'upload', label: 'Upload', icon: '📤', description: 'Add source video', x: 80, y: 120 },
   { id: 'transcribe', label: 'Transcribe', icon: '📝', description: 'Extract transcript', x: 360, y: 120 },
@@ -494,15 +510,15 @@ export function Feature1Page({ session }: Feature1PageProps) {
         buildCaptionCues(transcriptionDetails.segments ?? [], {
           clipStart: clip.startOffset,
           clipDuration: clip.duration,
-          maxWordsPerCue: agentCaptionDensity === 'tight' ? 2 : editShakingCaptions ? 2 : 4,
-          maxCharsPerCue: agentCaptionDensity === 'tight' ? 12 : editShakingCaptions ? 14 : 24,
-          maxCueDuration: agentCaptionDensity === 'tight' ? 1.4 : editShakingCaptions ? 1.6 : 2.5,
-          maxLineChars: agentCaptionDensity === 'tight' ? 9 : editShakingCaptions ? 10 : 16,
+          maxWordsPerCue: agentCaptionDensity === 'tight' ? 2 : 3,
+          maxCharsPerCue: agentCaptionDensity === 'tight' ? 12 : 18,
+          maxCueDuration: agentCaptionDensity === 'tight' ? 1.2 : 1.8,
+          maxLineChars: agentCaptionDensity === 'tight' ? 10 : 14,
           maxLinesPerCue: 2,
         }),
       ])
     );
-  }, [agentCaptionDensity, editShakingCaptions, result, transcriptionDetails]);
+  }, [agentCaptionDensity, result, transcriptionDetails]);
 
   const startPan = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -752,6 +768,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
         sourceAsset,
         googleDriveUrl: '',
         transcriptText: transcriptText.trim(),
+        transcriptSegments: transcriptionDetails?.segments,
         visualAnalysis: resolvedVisualAnalysis,
         editingOptions: currentEditingOptions,
       });
@@ -1860,7 +1877,7 @@ export function Feature1Page({ session }: Feature1PageProps) {
                               playsInline
                               preload="metadata"
                               poster={clip.posterUrl}
-                              src={clip.deliveryUrl}
+                              src={clip.previewUrl || clip.deliveryUrl || clip.aiPreviewUrl || clip.downloadUrl}
                               onMouseEnter={(e) => {
                                 const v = e.currentTarget;
                                 v.currentTime = 0;
@@ -1978,6 +1995,15 @@ export function Feature1Page({ session }: Feature1PageProps) {
                         const scorePercent = Math.round(clip.viralityScore);
                         const circumference = 2 * Math.PI * 38;
                         const strokeOffset = circumference - (scorePercent / 100) * circumference;
+                        const clipVideoSources = collectUniqueUrls([
+                          clip.deliveryUrl,
+                          clip.previewUrl,
+                          clip.aiPreviewUrl,
+                          clip.downloadUrl,
+                        ]);
+                        const cardVideoSrc = clipVideoSources[0] || '';
+                        const fallbackVideoSrcs = clipVideoSources.slice(1);
+                        const useRenderedVideo = clipVideoSources[0] === clip.deliveryUrl && Boolean(clip.deliveryUrl);
 
                         return (
                           <article
@@ -1989,14 +2015,18 @@ export function Feature1Page({ session }: Feature1PageProps) {
                               {recommended && <span className="reel-card-v2__badge">⭐ Best</span>}
                               {isTop && <span className="reel-card-v2__fire">🔥</span>}
                               <FaceDetectVideo
-                                src={clip.previewUrl || clip.aiPreviewUrl || clip.deliveryUrl}
+                                key={`${clip.id}:${clipVideoSources.join('|')}`}
+                                src={cardVideoSrc}
+                                fallbackSrcs={fallbackVideoSrcs}
                                 poster={clip.posterUrl}
                                 faceFocusEnabled={editFaceFocus}
+                                safeFrameEnabled={editSafeFaceFrame}
                                 captions={clipCaptionMap.get(clip.id) || []}
                                 captionsEnabled={Boolean(clipCaptionMap.get(clip.id)?.length)}
                                 captionVariant={editShakingCaptions ? 'shaking' : 'clean'}
                                 focusStrategy={clip.focusStrategy}
                                 cameraMotion={clip.cameraMotion}
+                                suppressLocalEffectsOnPrimarySource={useRenderedVideo}
                               />
                             </div>
 

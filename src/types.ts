@@ -184,6 +184,7 @@ export interface ReelCandidate {
   posterUrl: string;
   downloadUrl: string;
   aiPreviewUrl: string | null;
+  subtitleAsset?: ReelSubtitleAsset | null;
   qa?: ReelQualityAudit | null;
 }
 
@@ -208,6 +209,17 @@ export interface CaptionCue {
   start: number;
   end: number;
   words: TranscriptWord[];
+}
+
+export interface ReelSubtitleAsset {
+  id: string;
+  label: string;
+  publicId: string;
+  secureUrl: string;
+  format: 'srt';
+  cueCount: number;
+  resourceType: 'raw';
+  provider?: string;
 }
 
 export interface ReelGenerationResponse {

@@ -2,6 +2,7 @@ import type {
   Feature1EditingAdvice,
   MediaAsset,
   ReelGenerationResponse,
+  TranscriptSegment,
   VisualAnalysisSummary,
 } from '../types';
 
@@ -9,6 +10,7 @@ export interface GenerateReelsInput {
   sourceAsset?: MediaAsset | null;
   googleDriveUrl?: string;
   transcriptText?: string;
+  transcriptSegments?: TranscriptSegment[];
   editingOptions?: Feature1EditingAdvice;
   visualAnalysis?: VisualAnalysisSummary | null;
 }
@@ -17,6 +19,7 @@ export async function generateReels({
   sourceAsset,
   googleDriveUrl,
   transcriptText,
+  transcriptSegments,
   editingOptions,
   visualAnalysis,
 }: GenerateReelsInput): Promise<ReelGenerationResponse> {
@@ -29,6 +32,7 @@ export async function generateReels({
       sourceAsset,
       googleDriveUrl,
       transcriptText,
+      transcriptSegments,
       duration: sourceAsset?.duration,
       editingOptions,
       visualAnalysis,
