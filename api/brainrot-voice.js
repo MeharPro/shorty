@@ -39,6 +39,69 @@ function estimateDurationSeconds(text, speed) {
   return Math.max(8, Math.round((wordCount / (2.6 * speed)) * 10) / 10);
 }
 
+function buildWordTimings(alignment) {
+  if (
+    !alignment ||
+    !Array.isArray(alignment.characters) ||
+    !Array.isArray(alignment.character_start_times_seconds) ||
+    !Array.isArray(alignment.character_end_times_seconds)
+  ) {
+    return [];
+  }
+
+  const words = [];
+  let currentText = '';
+  let currentStart = null;
+  let currentEnd = null;
+
+  const flushWord = () => {
+    const text = cleanText(currentText);
+
+    if (!text || currentStart == null || currentEnd == null) {
+      currentText = '';
+      currentStart = null;
+      currentEnd = null;
+      return;
+    }
+
+    words.push({
+      text,
+      startSeconds: Math.max(0, Number(currentStart) || 0),
+      endSeconds: Math.max(Number(currentStart) || 0, Number(currentEnd) || 0),
+    });
+
+    currentText = '';
+    currentStart = null;
+    currentEnd = null;
+  };
+
+  alignment.characters.forEach((character, index) => {
+    const nextCharacter = String(character || '');
+    const startSeconds = Number(alignment.character_start_times_seconds[index]);
+    const endSeconds = Number(alignment.character_end_times_seconds[index]);
+
+    if (!nextCharacter.trim()) {
+      flushWord();
+      return;
+    }
+
+    if (currentStart == null) {
+      currentStart = Number.isFinite(startSeconds) ? startSeconds : endSeconds;
+    }
+
+    currentText += nextCharacter;
+    currentEnd = Number.isFinite(endSeconds)
+      ? endSeconds
+      : Number.isFinite(startSeconds)
+        ? startSeconds
+        : currentEnd;
+  });
+
+  flushWord();
+
+  return words;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -87,20 +150,22 @@ export default async function handler(req, res) {
   let temporaryFilePath = null;
 
   try {
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/with-timestamps?output_format=mp3_44100_128`,
+      {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Accept: 'audio/mpeg',
+        Accept: 'application/json',
         'xi-api-key': apiKey,
       },
       body: JSON.stringify({
         text,
         model_id: modelId,
-        output_format: 'mp3_44100_128',
         voice_settings: voiceSettings,
       }),
-    });
+      }
+    );
 
     if (!response.ok) {
       const raw = await response.text();
@@ -115,12 +180,21 @@ export default async function handler(req, res) {
       throw new Error(payload.detail?.message || payload.detail || payload.raw || 'ElevenLabs synthesis failed.');
     }
 
-    const audioBuffer = Buffer.from(await response.arrayBuffer());
+    const payload = await response.json();
+    const audioBase64 = String(payload.audio_base64 || '').trim();
+
+    if (!audioBase64) {
+      throw new Error('ElevenLabs did not return audio for the voiceover.');
+    }
+
+    const audioBuffer = Buffer.from(audioBase64, 'base64');
     temporaryFilePath = await createTemporaryMediaFile(seed, 'mp3', audioBuffer);
     const measuredDuration =
       (await getMediaDurationSeconds(temporaryFilePath)) ||
       estimateDurationSeconds(text, voiceSettings.speed);
     const publicId = `shorty/brainrot/audio/${slugify(seed) || 'voice'}-${Date.now()}`;
+    const alignment = payload.normalized_alignment || payload.alignment || null;
+    const wordTimings = buildWordTimings(alignment);
 
     await uploadBufferToCloudinary({
       cloudName,
@@ -139,6 +213,14 @@ export default async function handler(req, res) {
       provider: 'elevenlabs',
       modelId,
       voiceId,
+      alignment: wordTimings.length
+        ? {
+            sourceText: cleanText(
+              Array.isArray(alignment?.characters) ? alignment.characters.join('') : text
+            ),
+            words: wordTimings,
+          }
+        : null,
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {

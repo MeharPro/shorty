@@ -1,10 +1,13 @@
 import { source } from '@cloudinary/url-gen/actions/overlay';
 import { fill } from '@cloudinary/url-gen/actions/resize';
 import { trim, volume } from '@cloudinary/url-gen/actions/videoEdit';
+import { loop as loopEffect } from '@cloudinary/url-gen/actions/effect';
 import { compass } from '@cloudinary/url-gen/qualifiers/gravity';
 import { Position } from '@cloudinary/url-gen/qualifiers/position';
-import { audio, subtitles, text } from '@cloudinary/url-gen/qualifiers/source';
+import { audio, image as imageSource, text } from '@cloudinary/url-gen/qualifiers/source';
 import { TextStyle } from '@cloudinary/url-gen/qualifiers/textStyle';
+import { solid } from '@cloudinary/url-gen/qualifiers/textStroke';
+import { position as timelinePosition } from '@cloudinary/url-gen/qualifiers/timeline';
 import { mute } from '@cloudinary/url-gen/qualifiers/volume';
 import { format, quality } from '@cloudinary/url-gen/actions/delivery';
 import { auto as autoFormat } from '@cloudinary/url-gen/qualifiers/format';
@@ -14,10 +17,12 @@ import type { MediaAsset } from '../types';
 
 export const BRAINROT_FRAME_WIDTH = 1080;
 export const BRAINROT_FRAME_HEIGHT = 1920;
+export const INTRO_CARD_DURATION_SECONDS = 3;
 const DEFAULT_CAPTION = 'Watch this one closely';
 const DEFAULT_GAMEPLAY_PUBLIC_ID = 'shorty/brainrot/subway-surfers-demo';
 const CAPTION_LINE_LIMIT = 22;
 const CAPTION_MAX_LINES = 3;
+const INTRO_CARD_OVERLAY_OFFSET_Y = -160;
 
 export type BrainrotFontFamily = 'Arial' | 'Verdana' | 'Georgia' | 'Courier' | 'Impact';
 export type BrainrotGravityMode = 'north' | 'center' | 'south';
@@ -40,12 +45,16 @@ export type BrainrotGameplayPresetId =
   | 'subway-classic'
   | 'subway-speedrun'
   | 'subway-finale'
+  | 'satisfying-ice-cream'
+  | 'satisfying-bubbles'
   | 'custom-remote';
 export type BrainrotCaptionPresetId =
   | 'signal-pop'
   | 'clean-room'
   | 'night-shift'
-  | 'arcade-glow';
+  | 'arcade-glow'
+  | 'reddit-story';
+export type BrainrotTemplateId = 'subway-template' | 'satisfying-template';
 
 export interface BrainrotAudioAsset {
   id: string;
@@ -55,6 +64,17 @@ export interface BrainrotAudioAsset {
   duration: number;
   resourceType: 'video';
   provider?: string;
+}
+
+export interface BrainrotWordTiming {
+  text: string;
+  startSeconds: number;
+  endSeconds: number;
+}
+
+export interface BrainrotVoiceAlignment {
+  sourceText: string;
+  words: BrainrotWordTiming[];
 }
 
 export interface BrainrotSubtitleAsset {
@@ -71,9 +91,13 @@ export interface BrainrotSubtitleAsset {
 export interface BrainrotCaptionStyle {
   textColor: string;
   backgroundColor: string;
+  backgroundVisible: boolean;
   fontFamily: BrainrotFontFamily;
   fontSize: number;
   fontWeight: 'normal' | 'bold';
+  strokeColor: string;
+  strokeWidth: number;
+  maxWordsPerCue: number;
   placement: BrainrotGravityMode;
   horizontalOffset: number;
   verticalOffset: number;
@@ -108,6 +132,8 @@ export interface BrainrotGameplayPreset {
   source: 'local' | 'remote';
   defaultOffset: number;
   defaultGravity: BrainrotGravityMode;
+  remoteUrl?: string;
+  duration?: number;
 }
 
 export interface BrainrotVoiceOption {
@@ -125,6 +151,36 @@ export interface BrainrotCaptionStylePreset {
   description: string;
   previewFontFamily: string;
   style: BrainrotCaptionStyle;
+}
+
+export interface BrainrotTemplatePreset {
+  id: BrainrotTemplateId;
+  label: string;
+  tag: string;
+  description: string;
+  gameplayPresetId: BrainrotGameplayPresetId;
+  typeId: BrainrotTypeId;
+  captionPresetId: BrainrotCaptionPresetId;
+  preferredVoiceGender: 'female' | 'male';
+  defaultPrompt: string;
+  defaultIntroQuestion: string;
+  defaultScriptGuidance: string;
+}
+
+export interface BrainrotIntroCard {
+  enabled: boolean;
+  title: string;
+  question: string;
+  durationSeconds: number;
+}
+
+export interface BrainrotIntroCardAsset {
+  id: string;
+  publicId: string;
+  secureUrl: string;
+  width: number;
+  height: number;
+  resourceType: 'image';
 }
 
 export interface BrainrotScriptPackage {
@@ -150,6 +206,7 @@ export interface BrainrotVoiceResponse {
   provider: string;
   modelId: string;
   voiceId: string;
+  alignment?: BrainrotVoiceAlignment | null;
   generatedAt: string;
 }
 
@@ -158,6 +215,12 @@ export interface BrainrotVoicesResponse {
   defaultVoiceId: string;
   fallback?: boolean;
   warning?: string;
+}
+
+export interface BrainrotNodeSuggestion {
+  title: string;
+  body: string;
+  color: string;
 }
 
 export interface BrainrotCompositeOptions {
@@ -169,6 +232,8 @@ export interface BrainrotCompositeOptions {
   gameplayStartOffset: number;
   captionStyle?: BrainrotCaptionStyle;
   layoutStyle?: BrainrotLayoutStyle;
+  introCard?: BrainrotIntroCard;
+  introCardAsset?: BrainrotIntroCardAsset | null;
 }
 
 export const BRAINROT_TYPE_PRESETS: BrainrotTypePreset[] = [
@@ -198,7 +263,7 @@ export const BRAINROT_TYPE_PRESETS: BrainrotTypePreset[] = [
   },
   {
     id: 'reddit-drama',
-    label: 'Reddit Drama',
+    label: 'Drama Recap',
     tag: 'Drama',
     description: 'Messy recap energy with a clean setup, turn, and payoff.',
   },
@@ -210,13 +275,38 @@ export const BRAINROT_TYPE_PRESETS: BrainrotTypePreset[] = [
   },
 ];
 
-export const BRAINROT_FONT_OPTIONS: BrainrotFontFamily[] = [
-  'Arial',
-  'Verdana',
-  'Georgia',
-  'Courier',
-  'Impact',
+export const BRAINROT_TEMPLATE_PRESETS: BrainrotTemplatePreset[] = [
+  {
+    id: 'subway-template',
+    label: 'Subway Surfers Template',
+    tag: 'Classic',
+    description: 'Muted Subway Surfers gameplay under a tension-heavy story narration with centered captions.',
+    gameplayPresetId: 'subway-classic',
+    typeId: 'reddit-drama',
+    captionPresetId: 'reddit-story',
+    preferredVoiceGender: 'female',
+    defaultPrompt: 'What family tradition ruined your family?',
+    defaultIntroQuestion: 'What family tradition ruined your family?',
+    defaultScriptGuidance:
+      'Open with a strong question, then turn it into a gripping confession-style story with a female creator delivery. Keep the phrasing easy to caption in short 2 to 4 word bursts.',
+  },
+  {
+    id: 'satisfying-template',
+    label: 'Satisfying Video Template',
+    tag: 'ASMR',
+    description: 'Free stock satisfying footage behind an instant-hook opener and bold centered captions.',
+    gameplayPresetId: 'satisfying-ice-cream',
+    typeId: 'reddit-drama',
+    captionPresetId: 'reddit-story',
+    preferredVoiceGender: 'female',
+    defaultPrompt: 'What family tradition ruined your family?',
+    defaultIntroQuestion: 'What family tradition ruined your family?',
+    defaultScriptGuidance:
+      'Open with a sharp question and make it sound like an addicting story recap with a female creator voice. Keep every caption chunk short, punchy, and easy to read in the center of the screen.',
+  },
 ];
+
+export const BRAINROT_FONT_OPTIONS: BrainrotFontFamily[] = ['Impact'];
 
 export const BRAINROT_GAMEPLAY_GRAVITY_OPTIONS: BrainrotGravityMode[] = [
   'north',
@@ -253,6 +343,28 @@ export const BRAINROT_GAMEPLAY_PRESETS: BrainrotGameplayPreset[] = [
     defaultGravity: 'south',
   },
   {
+    id: 'satisfying-ice-cream',
+    label: 'Satisfying Ice Cream',
+    tag: 'Sweet',
+    description: 'A looping Thai ice cream macro clip that matches the soft, satisfying look in your reference.',
+    source: 'remote',
+    defaultOffset: 0,
+    defaultGravity: 'center',
+    remoteUrl: 'https://cdn.coverr.co/videos/coverr-making-thai-ice-cream-4635/360p.mp4',
+    duration: 8,
+  },
+  {
+    id: 'satisfying-bubbles',
+    label: 'Slow Bubbles',
+    tag: 'Calm',
+    description: 'Soft slow-motion bubbles as an alternate satisfying background template.',
+    source: 'remote',
+    defaultOffset: 0,
+    defaultGravity: 'center',
+    remoteUrl: 'https://cdn.coverr.co/videos/coverr-bubbles-in-slow-motion-4154/360p.mp4',
+    duration: 10,
+  },
+  {
     id: 'custom-remote',
     label: 'Custom Remote',
     tag: 'URL',
@@ -266,12 +378,16 @@ export const BRAINROT_GAMEPLAY_PRESETS: BrainrotGameplayPreset[] = [
 export const DEFAULT_BRAINROT_CAPTION_STYLE: BrainrotCaptionStyle = {
   textColor: '#ffffff',
   backgroundColor: '#101828',
+  backgroundVisible: false,
   fontFamily: 'Impact',
-  fontSize: 30,
+  fontSize: 28,
   fontWeight: 'bold',
+  strokeColor: '#050505',
+  strokeWidth: 3,
+  maxWordsPerCue: 3,
   placement: 'center',
   horizontalOffset: 0,
-  verticalOffset: 120,
+  verticalOffset: 0,
 };
 
 export const DEFAULT_BRAINROT_LAYOUT_STYLE: BrainrotLayoutStyle = {
@@ -296,14 +412,18 @@ export const BRAINROT_CAPTION_STYLE_PRESETS: BrainrotCaptionStylePreset[] = [
     description: 'Heavy, high-contrast social captions with a punchy yellow signal feel.',
     previewFontFamily: '"Anton", "Arial Black", sans-serif',
     style: {
-      textColor: '#111827',
-      backgroundColor: '#facc15',
+      textColor: '#ffe44d',
+      backgroundColor: '#000000',
+      backgroundVisible: false,
       fontFamily: 'Impact',
-      fontSize: 30,
+      fontSize: 36,
       fontWeight: 'bold',
+      strokeColor: '#000000',
+      strokeWidth: 6,
+      maxWordsPerCue: 3,
       placement: 'center',
       horizontalOffset: 0,
-      verticalOffset: 110,
+      verticalOffset: 0,
     },
   },
   {
@@ -314,13 +434,17 @@ export const BRAINROT_CAPTION_STYLE_PRESETS: BrainrotCaptionStylePreset[] = [
     previewFontFamily: '"Manrope", "Arial", sans-serif',
     style: {
       textColor: '#f8fafc',
-      backgroundColor: '#0f172a',
-      fontFamily: 'Verdana',
-      fontSize: 26,
+      backgroundColor: '#000000',
+      backgroundVisible: false,
+      fontFamily: 'Impact',
+      fontSize: 32,
       fontWeight: 'bold',
+      strokeColor: '#000000',
+      strokeWidth: 5,
+      maxWordsPerCue: 4,
       placement: 'center',
       horizontalOffset: 0,
-      verticalOffset: 110,
+      verticalOffset: 0,
     },
   },
   {
@@ -331,13 +455,17 @@ export const BRAINROT_CAPTION_STYLE_PRESETS: BrainrotCaptionStylePreset[] = [
     previewFontFamily: '"Space Grotesk", "Arial", sans-serif',
     style: {
       textColor: '#f8fafc',
-      backgroundColor: '#1e293b',
-      fontFamily: 'Georgia',
-      fontSize: 28,
+      backgroundColor: '#000000',
+      backgroundVisible: false,
+      fontFamily: 'Impact',
+      fontSize: 34,
       fontWeight: 'bold',
+      strokeColor: '#0f172a',
+      strokeWidth: 6,
+      maxWordsPerCue: 4,
       placement: 'center',
       horizontalOffset: 0,
-      verticalOffset: 120,
+      verticalOffset: 12,
     },
   },
   {
@@ -348,13 +476,38 @@ export const BRAINROT_CAPTION_STYLE_PRESETS: BrainrotCaptionStylePreset[] = [
     previewFontFamily: '"Bebas Neue", "Arial Narrow", sans-serif',
     style: {
       textColor: '#ecfeff',
-      backgroundColor: '#0f766e',
-      fontFamily: 'Courier',
-      fontSize: 28,
+      backgroundColor: '#000000',
+      backgroundVisible: false,
+      fontFamily: 'Impact',
+      fontSize: 34,
       fontWeight: 'bold',
+      strokeColor: '#083344',
+      strokeWidth: 6,
+      maxWordsPerCue: 4,
       placement: 'center',
       horizontalOffset: 0,
-      verticalOffset: 110,
+      verticalOffset: 0,
+    },
+  },
+  {
+    id: 'reddit-story',
+    label: 'Story Outline',
+    tag: 'Outline',
+    description: 'Bold white center captions with a thick black outline, tuned for fast story clips.',
+    previewFontFamily: '"Arial Black", "Anton", sans-serif',
+    style: {
+      textColor: '#ffffff',
+      backgroundColor: '#000000',
+      backgroundVisible: false,
+      fontFamily: 'Impact',
+      fontSize: 28,
+      fontWeight: 'bold',
+      strokeColor: '#000000',
+      strokeWidth: 3,
+      maxWordsPerCue: 3,
+      placement: 'center',
+      horizontalOffset: 0,
+      verticalOffset: 0,
     },
   },
 ];
@@ -370,6 +523,22 @@ export const FALLBACK_BRAINROT_VOICE: BrainrotVoiceOption = {
 function normalizeColor(value: string) {
   const trimmed = value.trim() || '#0f172a';
   return `rgb:${trimmed.replace(/^#/, '')}`;
+}
+
+function buildTextStyle(
+  captionStyle: BrainrotCaptionStyle,
+  options?: { fontSize?: number; includeStroke?: boolean }
+) {
+  const textStyle = new TextStyle(
+    captionStyle.fontFamily,
+    options?.fontSize ?? captionStyle.fontSize
+  ).fontWeight(captionStyle.fontWeight);
+
+  if (options?.includeStroke !== false && captionStyle.strokeWidth > 0) {
+    textStyle.stroke(solid(captionStyle.strokeWidth, normalizeColor(captionStyle.strokeColor)));
+  }
+
+  return textStyle;
 }
 
 function sanitizeCaptionText(value: string) {
@@ -413,44 +582,66 @@ function splitCaptionLines(value: string): string[] {
   return lines.slice(0, CAPTION_MAX_LINES);
 }
 
-function buildCaptionLayer(line: string, captionStyle: BrainrotCaptionStyle, offsetY: number) {
+function buildCaptionLayers(line: string, captionStyle: BrainrotCaptionStyle, offsetY: number) {
   const overlayText = sanitizeCaptionText(line) || DEFAULT_CAPTION;
-
-  return source(
-    text(
-      overlayText,
-      new TextStyle(captionStyle.fontFamily, captionStyle.fontSize).fontWeight(
-        captionStyle.fontWeight
-      )
-    )
-      .textColor(normalizeColor(captionStyle.textColor))
-      .backgroundColor(normalizeColor(captionStyle.backgroundColor))
-  ).position(
-    new Position()
-      .gravity(compass(captionStyle.placement))
-      .offsetX(captionStyle.horizontalOffset)
-      .offsetY(offsetY)
+  const textSource = text(overlayText, buildTextStyle(captionStyle)).textColor(
+    normalizeColor(captionStyle.textColor)
   );
+
+  if (captionStyle.backgroundVisible) {
+    textSource.backgroundColor(normalizeColor(captionStyle.backgroundColor));
+  }
+
+  return [
+    source(textSource).position(
+      new Position()
+        .gravity(compass(captionStyle.placement))
+        .offsetX(captionStyle.horizontalOffset)
+        .offsetY(offsetY)
+    ),
+  ];
 }
 
-function buildTimedSubtitlesLayer(
+function serializeOverlayPublicId(publicId: string) {
+  return String(publicId || '')
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\//g, ':');
+}
+
+function buildTimedSubtitlesTransformations(
   subtitlesAsset: BrainrotSubtitleAsset,
   captionStyle: BrainrotCaptionStyle
 ) {
-  return source(
-    subtitles(subtitlesAsset.publicId)
-      .textStyle(
-        new TextStyle(captionStyle.fontFamily, captionStyle.fontSize).fontWeight(
-          captionStyle.fontWeight
-        )
-      )
-      .textColor(normalizeColor(captionStyle.textColor))
-  ).position(
-    new Position()
-      .gravity(compass(captionStyle.placement))
-      .offsetX(captionStyle.horizontalOffset)
-      .offsetY(captionStyle.verticalOffset)
-  );
+  const sourceParts = [
+    `co_${normalizeColor(captionStyle.textColor)}`,
+    `l_subtitles:${buildTextStyle(captionStyle, { includeStroke: false }).toString()}:${serializeOverlayPublicId(subtitlesAsset.publicId)}`,
+  ];
+
+  if (captionStyle.backgroundVisible) {
+    sourceParts.push(`b_${normalizeColor(captionStyle.backgroundColor)}`);
+  }
+
+  if (captionStyle.strokeWidth > 0) {
+    sourceParts.push(
+      `bo_${captionStyle.strokeWidth}px_solid_${normalizeColor(captionStyle.strokeColor)}`
+    );
+  }
+
+  const applyParts = [`fl_layer_apply`, `g_${captionStyle.placement}`];
+
+  applyParts.push(`x_${captionStyle.horizontalOffset}`, `y_${captionStyle.verticalOffset}`);
+
+  return [`${sourceParts.join(',')}/${applyParts.join(',')}`];
+}
+
+function buildIntroCardOverlayLayer(introCardAsset: BrainrotIntroCardAsset) {
+  return source(imageSource(introCardAsset.publicId))
+    .position(new Position().gravity(compass('center')).offsetY(INTRO_CARD_OVERLAY_OFFSET_Y))
+    .timeline(
+      timelinePosition()
+        .startOffset(0)
+        .endOffset(INTRO_CARD_DURATION_SECONDS)
+    );
 }
 
 function isRemoteMediaAsset(asset: MediaAsset) {
@@ -475,10 +666,26 @@ function buildCompositeAsset(
     gameplayStartOffset,
     captionStyle = DEFAULT_BRAINROT_CAPTION_STYLE,
     layoutStyle = DEFAULT_BRAINROT_LAYOUT_STYLE,
+    introCard,
+    introCardAsset,
   }: BrainrotCompositeOptions,
   { includeAudio = true }: { includeAudio?: boolean } = {}
 ) {
-  const render = createBaseGameplayVideo(gameplayAsset)
+  const availableDuration = gameplayAsset.duration
+    ? Math.max(1, gameplayAsset.duration - gameplayStartOffset)
+    : null;
+  const requiredLoops = availableDuration
+    ? Math.max(0, Math.ceil(clipDuration / availableDuration) - 1)
+    : 0;
+  const introLeadInSeconds =
+    introCard?.enabled && introCard.question.trim() ? INTRO_CARD_DURATION_SECONDS : 0;
+  const render = createBaseGameplayVideo(gameplayAsset);
+
+  if (requiredLoops > 0) {
+    render.effect(loopEffect(requiredLoops));
+  }
+
+  render
     .videoEdit(trim().startOffset(gameplayStartOffset).duration(clipDuration))
     .videoEdit(volume(mute()))
     .resize(
@@ -493,7 +700,9 @@ function buildCompositeAsset(
   }
 
   if (subtitlesAsset?.publicId) {
-    render.overlay(buildTimedSubtitlesLayer(subtitlesAsset, captionStyle));
+    buildTimedSubtitlesTransformations(subtitlesAsset, captionStyle).forEach((layer) => {
+      render.addTransformation(layer);
+    });
   } else {
     const captionLines = splitCaptionLines(captionText);
     const lineOffset = Math.round(captionStyle.fontSize * 0.72);
@@ -501,10 +710,20 @@ function buildCompositeAsset(
       captionStyle.verticalOffset - ((captionLines.length - 1) * lineOffset) / 2;
 
     captionLines.forEach((line, index) => {
-      render.overlay(
-        buildCaptionLayer(line, captionStyle, Math.round(blockStartOffset + index * lineOffset))
-      );
+      buildCaptionLayers(line, captionStyle, Math.round(blockStartOffset + index * lineOffset))
+        .map((layer) =>
+          introLeadInSeconds > 0
+            ? layer.timeline(timelinePosition().startOffset(introLeadInSeconds))
+            : layer
+        )
+        .forEach((layer) => {
+          render.overlay(layer);
+        });
     });
+  }
+
+  if (introCardAsset && introLeadInSeconds > 0) {
+    render.overlay(buildIntroCardOverlayLayer(introCardAsset));
   }
 
   return render;
@@ -545,6 +764,7 @@ export function buildBrainrotRunPlan({
   layoutStyle,
   durationSeconds,
   timedCaptions = false,
+  introCard,
 }: {
   brainrotType: BrainrotTypeId;
   voiceLabel: string;
@@ -554,12 +774,16 @@ export function buildBrainrotRunPlan({
   layoutStyle: BrainrotLayoutStyle;
   durationSeconds: number;
   timedCaptions?: boolean;
+  introCard?: BrainrotIntroCard;
 }) {
   return [
     `Style: ${buildTypeLabel(brainrotType)} prompt turned into a short-form script`,
     `Voiceover: ${voiceLabel} via ElevenLabs for ${durationSeconds.toFixed(1)}s`,
     `Gameplay bed: ${gameplayLabel || 'Selected gameplay'} trimmed, muted, and filled edge-to-edge`,
     `Layout: gameplay fills the full 9:16 frame with ${layoutStyle.gameplayGravity} crop focus`,
+    introCard?.enabled
+      ? `Intro: rounded story post card shown solo for ${INTRO_CARD_DURATION_SECONDS.toFixed(1)}s before narration starts`
+      : 'Intro: no opening card overlay',
     timedCaptions
       ? `Captions: timed script-synced subtitles in ${captionStyle.fontFamily} ${captionStyle.fontSize}px at x ${captionStyle.horizontalOffset}px / y ${captionStyle.verticalOffset}px`
       : `Caption: "${sanitizeCaptionText(captionText) || DEFAULT_CAPTION}" in ${captionStyle.fontFamily} ${captionStyle.fontSize}px at x ${captionStyle.horizontalOffset}px / y ${captionStyle.verticalOffset}px`,
@@ -574,6 +798,11 @@ interface PrepareGameplayResponse {
   fallback?: boolean;
 }
 
+interface PrepareRemoteGameplayResponse {
+  asset: MediaAsset;
+  cached: boolean;
+}
+
 interface ResolveBrainrotGameplayResponse {
   resolvedUrl: string;
   candidates?: string[];
@@ -585,6 +814,10 @@ interface BrainrotCaptionsResponse {
   generatedAt: string;
   provider: string;
   strategy: string;
+}
+
+interface BrainrotIntroCardResponse {
+  asset: BrainrotIntroCardAsset;
 }
 
 export function createFallbackBrainrotGameplayAsset(): MediaAsset | null {
@@ -633,6 +866,23 @@ export async function prepareBrainrotGameplayAsset(): Promise<PrepareGameplayRes
   }
 }
 
+export async function prepareBrainrotRemoteGameplayAsset(input: {
+  presetId?: string;
+  url: string;
+  label: string;
+  duration?: number;
+}): Promise<PrepareRemoteGameplayResponse> {
+  const response = await fetch('/api/prepare-brainrot-remote-gameplay', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  });
+
+  return readJsonResponse<PrepareRemoteGameplayResponse>(response);
+}
+
 export async function fetchBrainrotVoices(): Promise<BrainrotVoicesResponse> {
   const response = await fetch('/api/brainrot-voices');
   const data = await readJsonResponse<BrainrotVoicesResponse>(response);
@@ -666,6 +916,9 @@ export async function generateBrainrotCaptions(input: {
   text: string;
   durationSeconds: number;
   seed: string;
+  maxWordsPerCue?: number;
+  trimStartSeconds?: number;
+  wordTimings?: BrainrotWordTiming[];
 }) {
   const response = await fetch('/api/brainrot-captions', {
     method: 'POST',
@@ -676,6 +929,21 @@ export async function generateBrainrotCaptions(input: {
   });
 
   return readJsonResponse<BrainrotCaptionsResponse>(response);
+}
+
+export async function generateBrainrotIntroCardAsset(introCard: BrainrotIntroCard) {
+  const response = await fetch('/api/brainrot-intro-card', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      title: introCard.title,
+      question: introCard.question,
+    }),
+  });
+
+  return readJsonResponse<BrainrotIntroCardResponse>(response);
 }
 
 export async function synthesizeBrainrotVoice(input: {
@@ -693,6 +961,18 @@ export async function synthesizeBrainrotVoice(input: {
   });
 
   return readJsonResponse<BrainrotVoiceResponse>(response);
+}
+
+export async function generateBrainrotNode(input: { prompt: string; seed?: string }) {
+  const response = await fetch('/api/brainrot-node', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  });
+
+  return readJsonResponse<BrainrotNodeSuggestion>(response);
 }
 
 export async function resolveBrainrotGameplayUrl(url: string): Promise<MediaAsset> {

@@ -1,29 +1,39 @@
 import { useEffect, useRef, useState } from 'react';
-import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
+import type {
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  WheelEvent as ReactWheelEvent,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { Link, Navigate } from 'react-router-dom';
 import boltLogo from '../assets/bolt-logo.png';
 import {
   BRAINROT_FRAME_HEIGHT,
   BRAINROT_FRAME_WIDTH,
   BRAINROT_CAPTION_STYLE_PRESETS,
-  BRAINROT_FONT_OPTIONS,
   BRAINROT_GAMEPLAY_PRESETS,
   BRAINROT_GAMEPLAY_GRAVITY_OPTIONS,
+  BRAINROT_TEMPLATE_PRESETS,
   BRAINROT_TYPE_PRESETS,
   DEFAULT_BRAINROT_CAPTION_STYLE,
   DEFAULT_BRAINROT_LAYOUT_STYLE,
   DEFAULT_BRAINROT_VOICE_SETTINGS,
   FALLBACK_BRAINROT_VOICE,
+  INTRO_CARD_DURATION_SECONDS,
   buildBrainrotCompositePosterUrl,
   buildBrainrotCompositeUrl,
   buildBrainrotRunPlan,
   fetchBrainrotVoices,
+  generateBrainrotIntroCardAsset,
+  generateBrainrotNode,
   generateBrainrotCaptions,
   generateBrainrotScript,
   prepareBrainrotGameplayAsset,
+  prepareBrainrotRemoteGameplayAsset,
   resolveBrainrotGameplayUrl,
   synthesizeBrainrotVoice,
   type BrainrotAudioAsset,
+  type BrainrotIntroCard,
   type BrainrotCaptionStyle,
   type BrainrotCaptionPresetId,
   type BrainrotFontFamily,
@@ -31,8 +41,10 @@ import {
   type BrainrotScriptPackage,
   type BrainrotStageId,
   type BrainrotSubtitleAsset,
+  type BrainrotTemplateId,
   type BrainrotTypeId,
   type BrainrotGameplayPresetId,
+  type BrainrotGameplayPreset,
   type BrainrotVoiceOption,
   type BrainrotVoiceSettings,
 } from '../lib/brainrot';
@@ -47,7 +59,7 @@ interface Feature2PageProps {
 type CanvasSelectionId = BrainrotStageId | string;
 type FlowNodeStatus = 'locked' | 'ready' | 'running' | 'complete' | 'error';
 type LogTone = 'info' | 'success' | 'warn' | 'error';
-type VoiceFilterMode = 'recommended' | 'expressive-male' | 'all' | 'cloned';
+type VoiceFilterMode = 'recommended' | 'expressive-female' | 'expressive-male' | 'all' | 'cloned';
 
 interface FlowNodeModel {
   id: BrainrotStageId;
@@ -124,6 +136,7 @@ const TARGET_DURATION_MAX = 90;
 const TARGET_DURATION_STEP = 5;
 const DEFAULT_TARGET_DURATION = 75;
 const TARGET_DURATION_PRESETS = [60, 75, 90];
+const DEFAULT_TEMPLATE_ID: BrainrotTemplateId = 'satisfying-template';
 const CAPTION_GUIDE_LINE_LIMIT = 22;
 const CAPTION_GUIDE_MAX_LINES = 3;
 const CAPTION_PREVIEW_FONT_SCALE = 0.62;
@@ -290,31 +303,35 @@ function buildCaptionGuideSourceText(input: {
   return source.replace(/\s+/g, ' ').trim();
 }
 
-function splitCaptionGuideLines(sourceText: string) {
+function splitCaptionGuideLines(sourceText: string, maxWordsPerCue: number) {
   const words = sourceText.split(' ').filter(Boolean);
   if (!words.length) {
     return ['Captions appear here'];
   }
 
+  const wordChunkSize = clamp(maxWordsPerCue || 3, 2, 6);
   const lines: string[] = [];
-  let current = '';
 
-  for (const word of words) {
-    const candidate = current ? `${current} ${word}` : word;
-    if (candidate.length > CAPTION_GUIDE_LINE_LIMIT && current) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = candidate;
+  for (let index = 0; index < words.length; index += wordChunkSize) {
+    const chunk = words.slice(index, index + wordChunkSize).join(' ');
+    if (!chunk) {
+      continue;
     }
 
-    if (lines.length === CAPTION_GUIDE_MAX_LINES) {
+    if (chunk.length > CAPTION_GUIDE_LINE_LIMIT && wordChunkSize > 2) {
+      const midpoint = Math.ceil(chunk.split(' ').length / 2);
+      lines.push(chunk.split(' ').slice(0, midpoint).join(' '));
+      if (lines.length === CAPTION_GUIDE_MAX_LINES) {
+        break;
+      }
+      lines.push(chunk.split(' ').slice(midpoint).join(' '));
+    } else {
+      lines.push(chunk);
+    }
+
+    if (lines.length >= CAPTION_GUIDE_MAX_LINES) {
       break;
     }
-  }
-
-  if (current && lines.length < CAPTION_GUIDE_MAX_LINES) {
-    lines.push(current);
   }
 
   return lines.slice(0, CAPTION_GUIDE_MAX_LINES);
@@ -383,15 +400,19 @@ function formatVoiceLabel(value: string) {
   return value.replace(/[_-]+/g, ' ').trim();
 }
 
-function scoreVoice(voice: BrainrotVoiceOption) {
+function scoreVoice(voice: BrainrotVoiceOption, preferredGender: 'female' | 'male' = 'female') {
   const gender = readVoiceLabel(voice, 'gender').toLowerCase();
   const useCase = readVoiceLabel(voice, 'use_case').toLowerCase();
   const descriptive = readVoiceLabel(voice, 'descriptive').toLowerCase();
   const category = voice.category.toLowerCase();
   let score = 0;
 
-  if (gender === 'male') {
+  if (gender === preferredGender) {
     score += 4;
+  }
+
+  if (gender && gender !== preferredGender) {
+    score += 0.5;
   }
 
   if (useCase.includes('social_media')) {
@@ -429,9 +450,12 @@ function scoreVoice(voice: BrainrotVoiceOption) {
   return score;
 }
 
-function sortVoicesByRecommendation(voices: BrainrotVoiceOption[]) {
+function sortVoicesByRecommendation(
+  voices: BrainrotVoiceOption[],
+  preferredGender: 'female' | 'male' = 'female'
+) {
   return [...voices].sort((left, right) => {
-    const delta = scoreVoice(right) - scoreVoice(left);
+    const delta = scoreVoice(right, preferredGender) - scoreVoice(left, preferredGender);
 
     if (delta !== 0) {
       return delta;
@@ -441,8 +465,19 @@ function sortVoicesByRecommendation(voices: BrainrotVoiceOption[]) {
   });
 }
 
-function pickRecommendedVoiceId(voices: BrainrotVoiceOption[]) {
-  return sortVoicesByRecommendation(voices)[0]?.id ?? FALLBACK_BRAINROT_VOICE.id;
+function pickRecommendedVoiceId(
+  voices: BrainrotVoiceOption[],
+  preferredGender: 'female' | 'male' = 'female'
+) {
+  const genderMatchedVoice = sortVoicesByRecommendation(voices, preferredGender).find(
+    (voice) => readVoiceLabel(voice, 'gender').toLowerCase() === preferredGender
+  );
+
+  return (
+    genderMatchedVoice?.id ??
+    sortVoicesByRecommendation(voices, preferredGender)[0]?.id ??
+    FALLBACK_BRAINROT_VOICE.id
+  );
 }
 
 function buildGeminiInputPreview({
@@ -450,16 +485,21 @@ function buildGeminiInputPreview({
   prompt,
   scriptGuidance,
   targetDurationSeconds,
+  introCard,
 }: {
   typeLabel: string;
   prompt: string;
   scriptGuidance: string;
   targetDurationSeconds: number;
+  introCard: BrainrotIntroCard;
 }) {
   return [
     `Brain rot style: ${typeLabel}`,
     `Topic: ${prompt.trim() || 'Describe the reel idea here.'}`,
     `Script guidance: ${scriptGuidance.trim() || 'Keep it punchy, conversational, and easy to caption.'}`,
+    introCard.enabled
+      ? `Opening card: rounded story card for ${INTRO_CARD_DURATION_SECONDS.toFixed(1)}s using ${introCard.title.trim() || 'Story Watch'} / ${introCard.question.trim() || 'Add your opening question here.'}`
+      : 'Opening card: disabled',
     `Target: ${targetDurationSeconds} second vertical voiceover with a strong hook and timed captions.`,
   ].join('\n');
 }
@@ -487,7 +527,91 @@ function buildManualScriptPackage(
   };
 }
 
+function buildAssetSeed(brainrotType: BrainrotTypeId, title: string) {
+  const typeLabel =
+    BRAINROT_TYPE_PRESETS.find((preset) => preset.id === brainrotType)?.label ?? brainrotType;
+
+  return `${typeLabel} ${title}`.replace(/\s+/g, ' ').trim();
+}
+
+function ensureQuestion(value: string) {
+  const trimmed = value.replace(/\s+/g, ' ').trim();
+
+  if (!trimmed) {
+    return '';
+  }
+
+  return /[?!.]$/.test(trimmed) ? trimmed : `${trimmed}?`;
+}
+
+function applyIntroCardToScript(
+  script: BrainrotScriptPackage,
+  introCard: BrainrotIntroCard
+): BrainrotScriptPackage {
+  if (!introCard.enabled) {
+    return script;
+  }
+
+  const question = ensureQuestion(introCard.question) || 'What happened next?';
+
+  return {
+    ...script,
+    hook: question,
+    captionText: question,
+  };
+}
+
+function formatIntroCardHandle(value: string) {
+  const trimmed = value.replace(/\s+/g, ' ').trim().replace(/^@+/, '');
+  return trimmed ? `@${trimmed}` : '@Story Watch';
+}
+
+function getIntroCardAvatarLetters(value: string) {
+  const cleaned = value.replace(/^@/, '');
+  const words = cleaned.split(/\s+/).filter(Boolean);
+
+  if (words.length >= 2) {
+    return `${words[0][0] ?? 'R'}${words[1][0] ?? 'W'}`.toUpperCase();
+  }
+
+  return (words[0] || 'RW').slice(0, 2).toUpperCase();
+}
+
+function RedditIntroCardPreview({ introCard }: { introCard: BrainrotIntroCard }) {
+  const handle = formatIntroCardHandle(introCard.title);
+  const initials = getIntroCardAvatarLetters(handle);
+  const question = ensureQuestion(introCard.question) || 'What happened next?';
+
+  return (
+    <div className="brainrot-reddit-card" role="presentation">
+      <div className="brainrot-reddit-card__avatar">{initials}</div>
+      <div className="brainrot-reddit-card__content">
+        <div className="brainrot-reddit-card__header">
+          <div className="brainrot-reddit-card__title-row">
+            <strong>{handle}</strong>
+            <span className="brainrot-reddit-card__verified">✓</span>
+          </div>
+          <div className="brainrot-reddit-card__badges" aria-hidden="true">
+            <span>✦</span>
+            <span>✶</span>
+            <span>✷</span>
+            <span>✹</span>
+            <span>✶</span>
+            <span>✦</span>
+          </div>
+        </div>
+        <p className="brainrot-reddit-card__question">{question}</p>
+        <div className="brainrot-reddit-card__footer">
+          <span>♡ 99+</span>
+          <span>↗ 99+</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function createRunSignature(input: {
+  templateId: BrainrotTemplateId;
   prompt: string;
   scriptGuidance: string;
   brainrotType: BrainrotTypeId;
@@ -501,6 +625,7 @@ function createRunSignature(input: {
   captionText: string;
   captionStyle: BrainrotCaptionStyle;
   layoutStyle: BrainrotLayoutStyle;
+  introCard: BrainrotIntroCard;
   gameplayStartOffset: number;
   manualScriptMode: boolean;
   manualCaptionMode: boolean;
@@ -514,6 +639,7 @@ interface CanvasCoreNodeProps {
   isSelected: boolean;
   onPointerDown: (event: ReactPointerEvent<HTMLDivElement>, nodeId: CanvasSelectionId) => void;
   onSelect: (id: CanvasSelectionId) => void;
+  onOpenEditor: (id: CanvasSelectionId) => void;
 }
 
 function CanvasCoreNode({
@@ -522,6 +648,7 @@ function CanvasCoreNode({
   isSelected,
   onPointerDown,
   onSelect,
+  onOpenEditor,
 }: CanvasCoreNodeProps) {
   return (
     <div
@@ -533,6 +660,11 @@ function CanvasCoreNode({
       style={{ left: node.x, top: node.y, width: CORE_NODE_WIDTH, minHeight: CORE_NODE_HEIGHT }}
       onPointerDown={(event) => onPointerDown(event, node.id)}
       onClick={() => onSelect(node.id)}
+      onDoubleClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenEditor(node.id);
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -542,9 +674,27 @@ function CanvasCoreNode({
     >
       <div className="brainrot-node__header">
         <span className="brainrot-node__step">{model.step}</span>
-        <span className={`brainrot-status-pill brainrot-status-pill--${model.status}`}>
-          {model.status}
-        </span>
+        <div className="brainrot-node__actions">
+          <span className={`brainrot-status-pill brainrot-status-pill--${model.status}`}>
+            {model.status}
+          </span>
+          <button
+            aria-label={`Edit ${model.title}`}
+            className="brainrot-node__menu"
+            type="button"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onOpenEditor(node.id);
+            }}
+          >
+            ⋯
+          </button>
+        </div>
       </div>
       <strong>{model.title}</strong>
       <p>{model.summary}</p>
@@ -559,6 +709,7 @@ interface CanvasCustomNodeProps {
   isSelected: boolean;
   onPointerDown: (event: ReactPointerEvent<HTMLDivElement>, nodeId: CanvasSelectionId) => void;
   onSelect: (id: CanvasSelectionId) => void;
+  onOpenEditor: (id: CanvasSelectionId) => void;
 }
 
 function CanvasCustomNode({
@@ -566,6 +717,7 @@ function CanvasCustomNode({
   isSelected,
   onPointerDown,
   onSelect,
+  onOpenEditor,
 }: CanvasCustomNodeProps) {
   return (
     <div
@@ -584,6 +736,11 @@ function CanvasCustomNode({
       }}
       onPointerDown={(event) => onPointerDown(event, node.id)}
       onClick={() => onSelect(node.id)}
+      onDoubleClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenEditor(node.id);
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -593,7 +750,25 @@ function CanvasCustomNode({
     >
       <div className="brainrot-node__header">
         <span className="brainrot-node__step">Freeform</span>
-        <span className="brainrot-custom-node__swatch" style={{ backgroundColor: node.color }} />
+        <div className="brainrot-node__actions">
+          <span className="brainrot-custom-node__swatch" style={{ backgroundColor: node.color }} />
+          <button
+            aria-label={`Edit ${node.title}`}
+            className="brainrot-node__menu"
+            type="button"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onOpenEditor(node.id);
+            }}
+          >
+            ⋯
+          </button>
+        </div>
       </div>
       <strong>{node.title}</strong>
       <p>{node.body}</p>
@@ -603,43 +778,54 @@ function CanvasCustomNode({
 }
 
 export function Feature2Page({ session }: Feature2PageProps) {
-  const [brainrotType, setBrainrotType] = useState<BrainrotTypeId>('subway-storytime');
+  const defaultTemplate =
+    BRAINROT_TEMPLATE_PRESETS.find((preset) => preset.id === DEFAULT_TEMPLATE_ID) ??
+    BRAINROT_TEMPLATE_PRESETS[0];
+  const defaultCaptionPreset =
+    BRAINROT_CAPTION_STYLE_PRESETS.find((preset) => preset.id === defaultTemplate.captionPresetId) ??
+    BRAINROT_CAPTION_STYLE_PRESETS[0];
+  const [selectedTemplateId, setSelectedTemplateId] = useState<BrainrotTemplateId>(
+    defaultTemplate.id
+  );
+  const [brainrotType, setBrainrotType] = useState<BrainrotTypeId>(defaultTemplate.typeId);
   const [targetDurationSeconds, setTargetDurationSeconds] = useState(DEFAULT_TARGET_DURATION);
-  const [promptInput, setPromptInput] = useState(
-    'Why do certain habits quietly ruin your focus even when your day looks productive?'
-  );
-  const [scriptGuidance, setScriptGuidance] = useState(
-    'Keep it sharp, specific, conversational, and easy to caption cleanly without mentioning the gameplay.'
-  );
+  const [promptInput, setPromptInput] = useState(defaultTemplate.defaultPrompt);
+  const [scriptGuidance, setScriptGuidance] = useState(defaultTemplate.defaultScriptGuidance);
   const [scriptDraft, setScriptDraft] = useState('');
   const [manualScriptMode, setManualScriptMode] = useState(false);
   const [lastGeneratedScript, setLastGeneratedScript] = useState<BrainrotScriptPackage | null>(null);
-  const [captionText, setCaptionText] = useState('Watch this one closely');
+  const [captionText, setCaptionText] = useState(defaultTemplate.defaultIntroQuestion);
   const [manualCaptionMode, setManualCaptionMode] = useState(false);
   const [selectedCaptionPresetId, setSelectedCaptionPresetId] =
-    useState<BrainrotCaptionPresetId>('signal-pop');
-  const [captionStyle, setCaptionStyle] = useState<BrainrotCaptionStyle>(
-    DEFAULT_BRAINROT_CAPTION_STYLE
-  );
+    useState<BrainrotCaptionPresetId>(defaultTemplate.captionPresetId);
+  const [captionStyle, setCaptionStyle] = useState<BrainrotCaptionStyle>(defaultCaptionPreset.style);
   const [layoutStyle, setLayoutStyle] = useState(DEFAULT_BRAINROT_LAYOUT_STYLE);
+  const [introCard, setIntroCard] = useState<BrainrotIntroCard>({
+    enabled: true,
+    title: 'Story Watch',
+    question: defaultTemplate.defaultIntroQuestion,
+    durationSeconds: INTRO_CARD_DURATION_SECONDS,
+  });
   const [voiceSettings, setVoiceSettings] = useState<BrainrotVoiceSettings>(
     DEFAULT_BRAINROT_VOICE_SETTINGS
   );
   const [voices, setVoices] = useState<BrainrotVoiceOption[]>([FALLBACK_BRAINROT_VOICE]);
   const [selectedVoiceId, setSelectedVoiceId] = useState(FALLBACK_BRAINROT_VOICE.id);
-  const [voiceFilterMode, setVoiceFilterMode] = useState<VoiceFilterMode>('recommended');
+  const [voiceFilterMode, setVoiceFilterMode] = useState<VoiceFilterMode>('expressive-female');
   const [voiceSearchInput, setVoiceSearchInput] = useState('');
   const [isVoicesLoading, setIsVoicesLoading] = useState(true);
   const [voicesWarning, setVoicesWarning] = useState('');
   const [selectedGameplayPresetId, setSelectedGameplayPresetId] =
-    useState<BrainrotGameplayPresetId>('subway-classic');
+    useState<BrainrotGameplayPresetId>(defaultTemplate.gameplayPresetId);
   const [localGameplayAsset, setLocalGameplayAsset] = useState<MediaAsset | null>(null);
+  const [builtInRemoteGameplayAsset, setBuiltInRemoteGameplayAsset] = useState<MediaAsset | null>(null);
   const [remoteGameplayAsset, setRemoteGameplayAsset] = useState<MediaAsset | null>(null);
   const [remoteGameplayUrl, setRemoteGameplayUrl] = useState('');
   const [voiceAsset, setVoiceAsset] = useState<BrainrotAudioAsset | null>(null);
   const [subtitleAsset, setSubtitleAsset] = useState<BrainrotSubtitleAsset | null>(null);
   const [gameplayStartOffset, setGameplayStartOffset] = useState(18);
   const [isPreparingGameplay, setIsPreparingGameplay] = useState(true);
+  const [isPreparingRemoteGameplay, setIsPreparingRemoteGameplay] = useState(false);
   const [isResolvingGameplay, setIsResolvingGameplay] = useState(false);
   const [isGameplayCached, setIsGameplayCached] = useState(false);
   const [isGameplayFallback, setIsGameplayFallback] = useState(false);
@@ -662,8 +848,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const [generatedRender, setGeneratedRender] = useState<GeneratedRender | null>(null);
   const [lastRunSignature, setLastRunSignature] = useState('');
   const [isRunDialogOpen, setIsRunDialogOpen] = useState(false);
+  const [isNodeEditorOpen, setIsNodeEditorOpen] = useState(false);
   const [runPromptDraft, setRunPromptDraft] = useState(promptInput);
   const [runScriptGuidanceDraft, setRunScriptGuidanceDraft] = useState(scriptGuidance);
+  const [aiNodePrompt, setAiNodePrompt] = useState('');
+  const [isAiNodeGenerating, setIsAiNodeGenerating] = useState(false);
   const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([
     createLogEntry('Brain Rot workspace booted. Prompt, script, and render nodes are ready.', 'info'),
   ]);
@@ -703,6 +892,9 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const selectedCustomNode =
     selectedCanvasNode && isCustomCanvasNode(selectedCanvasNode) ? selectedCanvasNode : null;
   const selectedCoreStage = isCoreStageId(selectedNode) ? selectedNode : null;
+  const selectedTemplate =
+    BRAINROT_TEMPLATE_PRESETS.find((preset) => preset.id === selectedTemplateId) ??
+    BRAINROT_TEMPLATE_PRESETS[0];
   const selectedTypePreset =
     BRAINROT_TYPE_PRESETS.find((preset) => preset.id === brainrotType) ?? BRAINROT_TYPE_PRESETS[0];
   const selectedCaptionPreset =
@@ -711,27 +903,51 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const selectedGameplayPreset =
     BRAINROT_GAMEPLAY_PRESETS.find((preset) => preset.id === selectedGameplayPresetId) ??
     BRAINROT_GAMEPLAY_PRESETS[0];
-  const gameplayAsset =
-    selectedGameplayPreset.source === 'remote' ? remoteGameplayAsset : localGameplayAsset;
+  const isCustomRemoteGameplayPreset = selectedGameplayPreset.id === 'custom-remote';
+  const matchingBuiltInRemoteGameplayAsset =
+    builtInRemoteGameplayAsset?.id === `preset-${selectedGameplayPreset.id}`
+      ? builtInRemoteGameplayAsset
+      : null;
+  const gameplayAsset = isCustomRemoteGameplayPreset
+    ? remoteGameplayAsset
+    : selectedGameplayPreset.source === 'remote'
+      ? matchingBuiltInRemoteGameplayAsset
+      : localGameplayAsset;
+  const isGameplayBusy = isCustomRemoteGameplayPreset
+    ? isResolvingGameplay
+    : selectedGameplayPreset.source === 'remote'
+      ? isPreparingRemoteGameplay
+      : isPreparingGameplay;
+  const preferredVoiceGender = selectedTemplate.preferredVoiceGender;
   const selectedVoice =
     voices.find((voice) => voice.id === selectedVoiceId) ??
     voices[0] ??
     FALLBACK_BRAINROT_VOICE;
-  const sortedVoices = sortVoicesByRecommendation(voices);
+  const sortedVoices = sortVoicesByRecommendation(voices, preferredVoiceGender);
   const voiceSearchQuery = voiceSearchInput.trim().toLowerCase();
-  const recommendedVoices = sortedVoices
-    .filter((voice) => readVoiceLabel(voice, 'gender').toLowerCase() === 'male')
-    .slice(0, 5);
+  const recommendedVoices =
+    sortedVoices
+      .filter((voice) => readVoiceLabel(voice, 'gender').toLowerCase() === preferredVoiceGender)
+      .slice(0, 5)
+      .length > 0
+      ? sortedVoices
+          .filter((voice) => readVoiceLabel(voice, 'gender').toLowerCase() === preferredVoiceGender)
+          .slice(0, 5)
+      : sortedVoices.slice(0, 5);
   const filteredVoices = sortedVoices.filter((voice) => {
     const gender = readVoiceLabel(voice, 'gender').toLowerCase();
     const useCase = readVoiceLabel(voice, 'use_case').toLowerCase();
     const descriptive = readVoiceLabel(voice, 'descriptive').toLowerCase();
 
+    if (voiceFilterMode === 'expressive-female' && gender !== 'female') {
+      return false;
+    }
+
     if (voiceFilterMode === 'expressive-male' && gender !== 'male') {
       return false;
     }
 
-    if (voiceFilterMode === 'recommended' && scoreVoice(voice) < 8) {
+    if (voiceFilterMode === 'recommended' && scoreVoice(voice, preferredVoiceGender) < 8) {
       return false;
     }
 
@@ -766,6 +982,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
     : Math.max(0, gameplayStartOffset);
 
   const runSignature = createRunSignature({
+    templateId: selectedTemplateId,
     prompt: promptInput,
     scriptGuidance,
     brainrotType,
@@ -779,6 +996,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
     captionText,
     captionStyle,
     layoutStyle,
+    introCard,
     gameplayStartOffset: safeGameplayOffset,
     manualScriptMode,
     manualCaptionMode,
@@ -787,10 +1005,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const canRun =
     Boolean(promptInput.trim() && selectedVoiceId) &&
     !isVoicesLoading &&
-    !isResolvingGameplay &&
-    (selectedGameplayPreset.source === 'remote'
-      ? Boolean(gameplayAsset)
-      : !isPreparingGameplay) &&
+    !isGameplayBusy &&
+    Boolean(gameplayAsset) &&
     renderState !== 'running';
   const scaledCanvasWidth = Math.round(canvasSize.width * canvasZoom);
   const scaledCanvasHeight = Math.round(canvasSize.height * canvasZoom);
@@ -800,7 +1016,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
     scriptDraft,
     generatedScript: lastGeneratedScript ?? generatedRender?.script ?? null,
   });
-  const captionGuideLines = splitCaptionGuideLines(captionGuideSourceText);
+  const captionGuideLines = splitCaptionGuideLines(
+    captionGuideSourceText,
+    captionStyle.maxWordsPerCue
+  );
   const captionPreviewPosition = resolveCaptionPreviewPosition(captionStyle);
   const captionGuideFontSize = clamp(
     Math.round(captionStyle.fontSize * CAPTION_PREVIEW_FONT_SCALE),
@@ -813,6 +1032,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
     prompt: runPromptDraft,
     scriptGuidance: runScriptGuidanceDraft,
     targetDurationSeconds,
+    introCard,
   });
 
   useEffect(() => {
@@ -857,8 +1077,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
     try {
       const response = await fetchBrainrotVoices();
-      const rankedVoices = sortVoicesByRecommendation(response.voices);
-      const recommendedVoiceId = pickRecommendedVoiceId(rankedVoices);
+      const rankedVoices = sortVoicesByRecommendation(response.voices, preferredVoiceGender);
+      const recommendedVoiceId = pickRecommendedVoiceId(rankedVoices, preferredVoiceGender);
       setVoices(rankedVoices);
       setSelectedVoiceId((current) =>
         rankedVoices.some((voice) => voice.id === current) ? current : recommendedVoiceId
@@ -867,7 +1087,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       appendLog(
         response.warning
           ? `Voices loaded with fallback data: ${response.warning}`
-          : `Loaded ${response.voices.length} ElevenLabs voice options and ranked the expressive male picks first.`,
+          : `Loaded ${response.voices.length} ElevenLabs voice options and ranked the ${preferredVoiceGender} picks first.`,
         response.warning ? 'warn' : 'success'
       );
     } catch (error) {
@@ -938,13 +1158,83 @@ export function Feature2Page({ session }: Feature2PageProps) {
     }
   };
 
+  const prepareBuiltInRemoteGameplay = async (
+    preset: BrainrotGameplayPreset,
+    options?: { quiet?: boolean }
+  ) => {
+    const quiet = options?.quiet ?? false;
+
+    if (!preset.remoteUrl) {
+      throw new Error('The selected built-in gameplay preset is missing its source URL.');
+    }
+
+    setIsPreparingRemoteGameplay(true);
+
+    if (!quiet) {
+      setStatusMessage(`Caching ${preset.label} in Cloudinary for rendering.`);
+      appendLog(`Caching the built-in ${preset.label} stock clip in Cloudinary.`, 'info');
+    }
+
+    try {
+      const response = await prepareBrainrotRemoteGameplayAsset({
+        presetId: preset.id,
+        url: preset.remoteUrl,
+        label: preset.label,
+        duration: preset.duration,
+      });
+      setBuiltInRemoteGameplayAsset(response.asset);
+
+      if (!quiet) {
+        setStatusMessage(
+          response.cached
+            ? `${preset.label} is ready from Cloudinary.`
+            : `${preset.label} was uploaded to Cloudinary and is ready.`
+        );
+        appendLog(
+          response.cached
+            ? `${preset.label} was already cached in Cloudinary.`
+            : `${preset.label} was cached in Cloudinary for stable rendering.`,
+          'success'
+        );
+      }
+
+      return response.asset;
+    } catch (error) {
+      setBuiltInRemoteGameplayAsset(null);
+      const nextMessage =
+        error instanceof Error ? error.message : 'Failed to prepare the built-in remote gameplay clip.';
+
+      if (!quiet) {
+        setStatusMessage(nextMessage);
+        appendLog(nextMessage, 'error');
+        setSelectedNode('gameplay');
+      }
+
+      throw error;
+    } finally {
+      setIsPreparingRemoteGameplay(false);
+    }
+  };
+
   useEffect(() => {
     if (dependenciesBootedRef.current) {
       return;
     }
 
     dependenciesBootedRef.current = true;
-    void Promise.allSettled([prepareGameplay({ quiet: false }), loadVoices()]);
+    void Promise.allSettled([
+      defaultTemplate.gameplayPresetId === 'custom-remote'
+        ? Promise.resolve(null)
+        : defaultTemplate.gameplayPresetId === 'satisfying-ice-cream' ||
+            defaultTemplate.gameplayPresetId === 'satisfying-bubbles'
+          ? prepareBuiltInRemoteGameplay(
+              BRAINROT_GAMEPLAY_PRESETS.find((preset) => preset.id === defaultTemplate.gameplayPresetId) ??
+                BRAINROT_GAMEPLAY_PRESETS[0],
+              { quiet: false }
+            )
+          : prepareGameplay({ quiet: false }),
+      loadVoices(),
+    ]);
     // Feature 2 should boot its dependencies immediately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -972,6 +1262,37 @@ export function Feature2Page({ session }: Feature2PageProps) {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isRunDialogOpen]);
+
+  useEffect(() => {
+    if (!isNodeEditorOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsNodeEditorOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isNodeEditorOpen]);
+
+  useEffect(() => {
+    const shouldLockScroll = isRunDialogOpen || isNodeEditorOpen;
+    const { overflow } = document.body.style;
+
+    if (shouldLockScroll) {
+      document.body.style.overflow = 'hidden';
+    }
+
+    return () => {
+      document.body.style.overflow = overflow;
+    };
+  }, [isNodeEditorOpen, isRunDialogOpen]);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -1088,9 +1409,9 @@ export function Feature2Page({ session }: Feature2PageProps) {
       step: '01',
       title: 'Prompt + style',
       summary: promptInput.trim()
-        ? `${selectedTypePreset.label} queued for a ${targetDurationSeconds}s reel.`
-        : 'Choose the brain rot type and describe what the reel should say.',
-      code: 'prompt -> brainrotType -> promptInput',
+        ? `${selectedTemplate.label} • ${selectedTypePreset.label} queued for a ${targetDurationSeconds}s reel.`
+        : 'Choose the template, opening question, and what the reel should say.',
+      code: 'template -> introCard -> brainrotType -> promptInput',
       status: promptInput.trim() ? 'complete' : 'ready',
     },
     {
@@ -1119,7 +1440,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
         ? `${selectedVoice.name} voiceover ready • ${formatDuration(voiceAsset.duration)}`
         : isVoicesLoading
           ? 'Loading ElevenLabs voices.'
-          : `${selectedVoice.name} is selected for the AI narration.`,
+          : `${selectedVoice.name} is selected for the ${preferredVoiceGender} AI narration.`,
       code: 'POST /api/brainrot-voice',
       status: isVoicesLoading
         ? 'running'
@@ -1135,15 +1456,25 @@ export function Feature2Page({ session }: Feature2PageProps) {
       id: 'gameplay',
       step: '04',
       title: 'Gameplay bed',
-      summary: isPreparingGameplay
-        ? 'Preparing the built-in Subway gameplay bed from src/assets.'
-        : gameplayAsset
-          ? `${selectedGameplayPreset.label} is ready under the voiceover.`
+      summary: isGameplayBusy
+        ? isCustomRemoteGameplayPreset
+          ? 'Resolving the remote gameplay feed.'
           : selectedGameplayPreset.source === 'remote'
+            ? `Caching ${selectedGameplayPreset.label} in Cloudinary for stable rendering.`
+            : 'Preparing the built-in Subway gameplay bed from src/assets.'
+        : gameplayAsset
+          ? selectedGameplayPreset.source === 'remote' && !isCustomRemoteGameplayPreset
+            ? `${selectedGameplayPreset.label} is cached in Cloudinary and ready under the voiceover.`
+            : `${selectedGameplayPreset.label} is ready under the voiceover.`
+          : isCustomRemoteGameplayPreset
             ? 'Attach a remote gameplay URL to complete this node.'
             : 'Gameplay prep failed. Retry this node.',
-      code: 'GET /api/prepare-brainrot-gameplay',
-      status: isPreparingGameplay
+      code: isCustomRemoteGameplayPreset
+        ? 'POST /api/resolve-gameplay -> remote fetch'
+        : selectedGameplayPreset.source === 'remote'
+          ? 'POST /api/prepare-brainrot-remote-gameplay'
+          : 'GET /api/prepare-brainrot-gameplay',
+      status: isGameplayBusy
         ? 'running'
         : activeRunStage === 'gameplay'
           ? 'running'
@@ -1157,7 +1488,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       id: 'caption',
       step: '05',
       title: 'Caption overlay',
-      summary: `${selectedCaptionPreset.label} • timed Cloudinary subtitles from the AI script`,
+      summary: `${selectedCaptionPreset.label} • short centered subtitle bursts with a black outline`,
       code: 'POST /api/brainrot-captions -> Cloudinary subtitles overlay',
       status: activeRunStage === 'caption'
         ? 'running'
@@ -1201,10 +1532,33 @@ export function Feature2Page({ session }: Feature2PageProps) {
     BrainrotStageId,
     FlowNodeModel
   >;
+  const selectedNodeTitle = selectedCoreStage
+    ? coreFlowMap[selectedCoreStage]?.title
+    : selectedCustomNode?.title ?? 'Node';
+  const selectedNodeDescription = selectedCoreStage
+    ? coreFlowMap[selectedCoreStage]?.summary
+    : 'Edit the freeform note, move it, or remove it from the canvas.';
+  const selectedNodeCode = selectedCoreStage ? coreFlowMap[selectedCoreStage]?.code : '';
 
   if (!session) {
     return <Navigate replace to="/login" />;
   }
+
+  const openNodeEditor = (id: CanvasSelectionId) => {
+    if (!canvasNodes.some((node) => node.id === id)) {
+      return;
+    }
+
+    dragStateRef.current = null;
+    setSelectedNode(id);
+    setIsRunDialogOpen(false);
+    setIsNodeEditorOpen(true);
+  };
+
+  const closeNodeEditor = () => {
+    dragStateRef.current = null;
+    setIsNodeEditorOpen(false);
+  };
 
   const handleNodePointerDown = (
     event: ReactPointerEvent<HTMLDivElement>,
@@ -1268,7 +1622,12 @@ export function Feature2Page({ session }: Feature2PageProps) {
     updateCanvasZoom(canvasZoom - Math.sign(event.deltaY) * CANVAS_ZOOM_STEP);
   };
 
-  const handleAddCustomNode = () => {
+  const createCustomNodeFromInput = (input: {
+    title: string;
+    body: string;
+    color: string;
+    logMessage: string;
+  }) => {
     const customNodeCount = canvasNodes.filter(isCustomCanvasNode).length;
     const canvasStage = canvasStageRef.current;
     const viewportCenterX = canvasStage
@@ -1290,15 +1649,59 @@ export function Feature2Page({ session }: Feature2PageProps) {
         CANVAS_PADDING,
         canvasSize.height - CUSTOM_NODE_HEIGHT - CANVAS_PADDING
       ),
-      title: `Custom node ${customNodeCount + 1}`,
-      body: 'Describe an extra note, a QA check, or a future branch.',
-      color: '#06b6d4',
+      title: input.title,
+      body: input.body,
+      color: input.color,
     };
 
     setCanvasNodes((current) => [...current, nextNode]);
+    dragStateRef.current = null;
     setSelectedNode(nextNode.id);
+    setIsRunDialogOpen(false);
+    setIsNodeEditorOpen(true);
     setStatusMessage('Custom node added to the freeform canvas.');
-    appendLog('Custom node added to the canvas.', 'success');
+    appendLog(input.logMessage, 'success');
+  };
+
+  const handleAddCustomNode = () => {
+    createCustomNodeFromInput({
+      title: `Custom node ${canvasNodes.filter(isCustomCanvasNode).length + 1}`,
+      body: 'Describe an extra note, a QA check, or a future branch.',
+      color: '#06b6d4',
+      logMessage: 'Custom node added to the canvas.',
+    });
+  };
+
+  const handleAddAiNode = async () => {
+    if (!aiNodePrompt.trim()) {
+      setStatusMessage('Describe the node you want AI to create first.');
+      appendLog('AI node creation blocked because the prompt is empty.', 'error');
+      return;
+    }
+
+    setIsAiNodeGenerating(true);
+    appendLog(`Generating an AI node from "${aiNodePrompt.trim()}".`, 'info');
+
+    try {
+      const suggestion = await generateBrainrotNode({
+        prompt: aiNodePrompt,
+        seed: brainrotType,
+      });
+      createCustomNodeFromInput({
+        title: suggestion.title,
+        body: suggestion.body,
+        color: suggestion.color,
+        logMessage: `AI node "${suggestion.title}" added to the canvas.`,
+      });
+      setAiNodePrompt('');
+    } catch (error) {
+      const nextMessage =
+        error instanceof Error ? error.message : 'Failed to generate the AI flowchart node.';
+      setStatusMessage(nextMessage);
+      appendLog(nextMessage, 'error');
+    } finally {
+      setIsAiNodeGenerating(false);
+    }
   };
 
   const handleResetCoreLayout = () => {
@@ -1336,9 +1739,69 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
   const handleDeleteCustomNode = (nodeId: string) => {
     setCanvasNodes((current) => current.filter((node) => node.id !== nodeId));
+    dragStateRef.current = null;
     setSelectedNode('render');
+    setIsNodeEditorOpen(false);
     setStatusMessage('Custom node removed from the freeform canvas.');
     appendLog('Custom node removed from the canvas.', 'warn');
+  };
+
+  const handleSelectTemplate = (templateId: BrainrotTemplateId) => {
+    const template =
+      BRAINROT_TEMPLATE_PRESETS.find((preset) => preset.id === templateId) ??
+      BRAINROT_TEMPLATE_PRESETS[0];
+    const templateCaptionPreset =
+      BRAINROT_CAPTION_STYLE_PRESETS.find((preset) => preset.id === template.captionPresetId) ??
+      BRAINROT_CAPTION_STYLE_PRESETS[0];
+    const templateGameplayPreset =
+      BRAINROT_GAMEPLAY_PRESETS.find((preset) => preset.id === template.gameplayPresetId) ??
+      BRAINROT_GAMEPLAY_PRESETS[0];
+    const nextVoiceFilterMode =
+      template.preferredVoiceGender === 'female' ? 'expressive-female' : 'expressive-male';
+
+    setSelectedTemplateId(template.id);
+    setBrainrotType(template.typeId);
+    setPromptInput(template.defaultPrompt);
+    setScriptGuidance(template.defaultScriptGuidance);
+    setCaptionText(template.defaultIntroQuestion);
+    setManualScriptMode(false);
+    setScriptDraft('');
+    setLastGeneratedScript(null);
+    setManualCaptionMode(false);
+    setSelectedCaptionPresetId(templateCaptionPreset.id);
+    setCaptionStyle(templateCaptionPreset.style);
+    setSelectedGameplayPresetId(templateGameplayPreset.id);
+    setGameplayStartOffset(templateGameplayPreset.defaultOffset);
+    setLayoutStyle((current) => ({
+      ...current,
+      gameplayGravity: templateGameplayPreset.defaultGravity,
+    }));
+    setIntroCard({
+      enabled: true,
+      title: 'Story Watch',
+      question: template.defaultIntroQuestion,
+      durationSeconds: INTRO_CARD_DURATION_SECONDS,
+    });
+    setVoiceFilterMode(nextVoiceFilterMode);
+    setSelectedVoiceId((current) => {
+      if (voices.some((voice) => voice.id === current)) {
+        return pickRecommendedVoiceId(voices, template.preferredVoiceGender);
+      }
+
+      return pickRecommendedVoiceId(voices, template.preferredVoiceGender);
+    });
+
+    if (templateGameplayPreset.source === 'local') {
+      if (!localGameplayAsset && !isPreparingGameplay) {
+        void prepareGameplay();
+      }
+    } else if (templateGameplayPreset.id !== 'custom-remote') {
+      void prepareBuiltInRemoteGameplay(templateGameplayPreset);
+    }
+
+    setSelectedNode('prompt');
+    setStatusMessage(`${template.label} is now driving the flow.`);
+    appendLog(`Template switched to ${template.label}.`, 'success');
   };
 
   const handleSelectGameplayPreset = (presetId: BrainrotGameplayPresetId) => {
@@ -1353,8 +1816,30 @@ export function Feature2Page({ session }: Feature2PageProps) {
       gameplayGravity: preset.defaultGravity,
     }));
 
-    if (preset.source === 'local' && !localGameplayAsset && !isPreparingGameplay) {
-      void prepareGameplay();
+    if (preset.source === 'local') {
+      if (!localGameplayAsset && !isPreparingGameplay) {
+        void prepareGameplay();
+      }
+    } else if (preset.id !== 'custom-remote') {
+      void prepareBuiltInRemoteGameplay(preset);
+    }
+
+    if (preset.id === 'satisfying-ice-cream' || preset.id === 'satisfying-bubbles') {
+      setSelectedTemplateId('satisfying-template');
+      setVoiceFilterMode('expressive-female');
+      setSelectedVoiceId((current) =>
+        voices.some((voice) => voice.id === current)
+          ? pickRecommendedVoiceId(voices, 'female')
+          : FALLBACK_BRAINROT_VOICE.id
+      );
+    } else if (preset.id === 'subway-classic' || preset.id === 'subway-speedrun' || preset.id === 'subway-finale') {
+      setSelectedTemplateId('subway-template');
+      setVoiceFilterMode('expressive-female');
+      setSelectedVoiceId((current) =>
+        voices.some((voice) => voice.id === current)
+          ? pickRecommendedVoiceId(voices, 'female')
+          : FALLBACK_BRAINROT_VOICE.id
+      );
     }
 
     setStatusMessage(`${preset.label} is now armed for the gameplay node.`);
@@ -1403,7 +1888,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
     appendLog(`Caption preset switched to ${preset.label}.`, 'info');
   };
 
-  const handleCaptionEditorPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const startCaptionMoveInteraction = (
+    clientX: number,
+    clientY: number,
+    preventDefault: () => void
+  ) => {
     const editor = captionLayoutEditorRef.current;
 
     if (!editor) {
@@ -1413,36 +1902,71 @@ export function Feature2Page({ session }: Feature2PageProps) {
     const rect = editor.getBoundingClientRect();
     captionEditorStateRef.current = {
       mode: 'move',
-      startClientX: event.clientX,
-      startClientY: event.clientY,
+      startClientX: clientX,
+      startClientY: clientY,
       startHorizontalOffset: captionStyle.horizontalOffset,
       startVerticalOffset: captionStyle.verticalOffset,
       editorWidth: rect.width,
       editorHeight: rect.height,
     };
 
-    event.preventDefault();
+    preventDefault();
   };
 
-  const handleCaptionResizePointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const handleCaptionEditorPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    startCaptionMoveInteraction(event.clientX, event.clientY, () => event.preventDefault());
+  };
+
+  const handleCaptionEditorMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
+    startCaptionMoveInteraction(event.clientX, event.clientY, () => event.preventDefault());
+  };
+
+  const startCaptionResizeInteraction = (
+    clientX: number,
+    clientY: number,
+    preventDefault: () => void,
+    stopPropagation: () => void
+  ) => {
     captionEditorStateRef.current = {
       mode: 'resize',
-      startClientX: event.clientX,
-      startClientY: event.clientY,
+      startClientX: clientX,
+      startClientY: clientY,
       startFontSize: captionStyle.fontSize,
     };
 
-    event.preventDefault();
-    event.stopPropagation();
+    preventDefault();
+    stopPropagation();
+  };
+
+  const handleCaptionResizePointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    startCaptionResizeInteraction(
+      event.clientX,
+      event.clientY,
+      () => event.preventDefault(),
+      () => event.stopPropagation()
+    );
+  };
+
+  const handleCaptionResizeMouseDown = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    startCaptionResizeInteraction(
+      event.clientX,
+      event.clientY,
+      () => event.preventDefault(),
+      () => event.stopPropagation()
+    );
   };
 
   const handleResetCaptionLayout = () => {
+    const baselineStyle =
+      BRAINROT_CAPTION_STYLE_PRESETS.find((preset) => preset.id === selectedCaptionPresetId)?.style ??
+      DEFAULT_BRAINROT_CAPTION_STYLE;
+
     setCaptionStyle((current) => ({
       ...current,
       placement: 'center',
-      horizontalOffset: 0,
-      verticalOffset: DEFAULT_BRAINROT_CAPTION_STYLE.verticalOffset,
-      fontSize: DEFAULT_BRAINROT_CAPTION_STYLE.fontSize,
+      horizontalOffset: baselineStyle.horizontalOffset,
+      verticalOffset: baselineStyle.verticalOffset,
+      fontSize: baselineStyle.fontSize,
     }));
     appendLog('Caption layout reset to the default stage position.', 'info');
   };
@@ -1452,6 +1976,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       return;
     }
 
+    setIsNodeEditorOpen(false);
     setRunPromptDraft(promptInput);
     setRunScriptGuidanceDraft(scriptGuidance);
     setIsRunDialogOpen(true);
@@ -1481,10 +2006,28 @@ export function Feature2Page({ session }: Feature2PageProps) {
     let ensuredGameplay = gameplayAsset;
 
     if (selectedGameplayPreset.source === 'remote' && !ensuredGameplay) {
-      setSelectedNode('gameplay');
-      setStatusMessage('Attach a remote gameplay feed before running the pipeline.');
-      appendLog('Run blocked because the custom remote gameplay node is still empty.', 'error');
-      return;
+      if (isCustomRemoteGameplayPreset) {
+        setSelectedNode('gameplay');
+        setStatusMessage('Attach a remote gameplay feed before running the pipeline.');
+        appendLog('Run blocked because the custom remote gameplay node is still empty.', 'error');
+        return;
+      }
+
+      try {
+        setSelectedNode('gameplay');
+        setActiveRunStage('gameplay');
+        appendLog(
+          `Built-in stock clip missing from Cloudinary. Caching ${selectedGameplayPreset.label} before the run continues.`,
+          'info'
+        );
+        ensuredGameplay = await prepareBuiltInRemoteGameplay(selectedGameplayPreset, { quiet: true });
+      } catch {
+        setActiveRunStage(null);
+        setSelectedNode('gameplay');
+        setStatusMessage('Gameplay bed could not be prepared.');
+        appendLog('Run stopped because the built-in stock gameplay failed.', 'error');
+        return;
+      }
     }
 
     if (!ensuredGameplay && selectedGameplayPreset.source === 'local') {
@@ -1551,6 +2094,12 @@ export function Feature2Page({ session }: Feature2PageProps) {
         appendLog('Script node complete. Gemini returned the narration and caption hook.', 'success');
       }
 
+      effectiveScript = applyIntroCardToScript(effectiveScript, introCard);
+      setLastGeneratedScript(effectiveScript);
+      setScriptDraft(effectiveScript.spokenScript);
+
+      const introLeadInSeconds =
+        introCard.enabled && introCard.question.trim() ? INTRO_CARD_DURATION_SECONDS : 0;
       const effectiveCaption =
         manualCaptionMode && captionText.trim()
           ? captionText
@@ -1563,7 +2112,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
         text: effectiveScript.spokenScript,
         voiceId: selectedVoiceId,
         voiceSettings,
-        seed: `${brainrotType}-${effectiveScript.title}`,
+        seed: buildAssetSeed(brainrotType, effectiveScript.title),
       });
       setVoiceAsset(voiceResponse.audioAsset);
       appendLog(
@@ -1576,17 +2125,19 @@ export function Feature2Page({ session }: Feature2PageProps) {
         voiceResponse.durationSeconds || voiceResponse.audioAsset.duration || targetDurationSeconds;
       const clipDuration = ensuredGameplay.duration
         ? clamp(
-            Math.max(targetDurationSeconds, Math.ceil(measuredVoiceDuration + 1)),
+            Math.max(targetDurationSeconds, Math.ceil(measuredVoiceDuration + introLeadInSeconds + 1)),
             TARGET_DURATION_MIN,
             Math.max(TARGET_DURATION_MIN, Math.floor(ensuredGameplay.duration))
           )
-        : Math.max(targetDurationSeconds, Math.ceil(measuredVoiceDuration + 1));
+        : Math.max(targetDurationSeconds, Math.ceil(measuredVoiceDuration + introLeadInSeconds + 1));
 
       setActiveRunStage('gameplay');
       setSelectedNode('gameplay');
       appendLog(
-        selectedGameplayPreset.source === 'remote'
+        isCustomRemoteGameplayPreset
           ? 'Gameplay bed ready. Reusing the attached remote gameplay feed.'
+          : selectedGameplayPreset.source === 'remote'
+            ? `Gameplay bed ready. Reusing the cached ${selectedGameplayPreset.label} clip.`
           : `Gameplay bed ready. Reusing ${selectedGameplayPreset.label}.`,
         'info'
       );
@@ -1607,7 +2158,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
         const captionResponse = await generateBrainrotCaptions({
           text: effectiveScript.spokenScript,
           durationSeconds: measuredVoiceDuration,
-          seed: `${brainrotType}-${effectiveScript.title}`,
+          seed: buildAssetSeed(brainrotType, effectiveScript.title),
+          maxWordsPerCue: captionStyle.maxWordsPerCue,
+          trimStartSeconds: introLeadInSeconds,
+          wordTimings: voiceResponse.alignment?.words,
         });
         nextSubtitleAsset = captionResponse.subtitleAsset;
         setSubtitleAsset(captionResponse.subtitleAsset);
@@ -1632,6 +2186,23 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
       setActiveRunStage('render');
       setSelectedNode('render');
+      let introCardAsset = null;
+
+      if (introLeadInSeconds > 0) {
+        try {
+          const introCardResponse = await generateBrainrotIntroCardAsset(introCard);
+          introCardAsset = introCardResponse.asset;
+          appendLog('Opening card rebuilt as a rounded story post for the first three seconds.', 'success');
+        } catch (introCardError) {
+          appendLog(
+            introCardError instanceof Error
+              ? introCardError.message
+              : 'Failed to build the opening story card. Continuing without it.',
+            'warn'
+          );
+        }
+      }
+
       const safeOffset = ensuredGameplay.duration
         ? clamp(
             safeGameplayOffset,
@@ -1648,6 +2219,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
         gameplayStartOffset: safeOffset,
         captionStyle,
         layoutStyle,
+        introCard,
+        introCardAsset,
       };
       const deliveryUrl = buildBrainrotCompositeUrl(compositeOptions);
       const posterUrl = buildBrainrotCompositePosterUrl(compositeOptions);
@@ -1660,6 +2233,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
         layoutStyle,
         durationSeconds: clipDuration,
         timedCaptions: Boolean(nextSubtitleAsset),
+        introCard,
       });
 
       setGeneratedRender({
@@ -1677,6 +2251,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
       });
       setLastRunSignature(
         createRunSignature({
+          templateId: selectedTemplateId,
           prompt: effectivePromptInput,
           scriptGuidance: effectiveScriptGuidance,
           brainrotType,
@@ -1690,6 +2265,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
           captionText: effectiveCaption,
           captionStyle,
           layoutStyle,
+          introCard,
           gameplayStartOffset: safeOffset,
           manualScriptMode,
           manualCaptionMode,
@@ -1765,6 +2341,29 @@ export function Feature2Page({ session }: Feature2PageProps) {
                 </p>
               </div>
               <div className="brainrot-flow-actions">
+                <label className="brainrot-flow-actions__prompt">
+                  <span>AI node</span>
+                  <input
+                    type="text"
+                    value={aiNodePrompt}
+                    onChange={(event) => setAiNodePrompt(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        void handleAddAiNode();
+                      }
+                    }}
+                    placeholder='Try "make the camera shaky"'
+                  />
+                </label>
+                <button
+                  className="btn btn--ghost"
+                  type="button"
+                  onClick={() => void handleAddAiNode()}
+                  disabled={isAiNodeGenerating}
+                >
+                  {isAiNodeGenerating ? 'Thinking...' : 'Add AI node'}
+                </button>
                 <button className="btn btn--ghost" type="button" onClick={handleAddCustomNode}>
                   Add node
                 </button>
@@ -1794,8 +2393,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
             <div className="brainrot-canvas-shell">
               <div className="brainrot-canvas-toolbar">
                 <span>
-                  Core nodes drive execution. Custom nodes are freeform notes. The stage is bounded,
-                  so nothing disappears off-canvas. Use +/- or pinch with trackpad to zoom.
+                  Core nodes drive execution. Double-click any node or hit the three dots to edit
+                  its settings. Custom nodes can be added blank or generated with AI.
                 </span>
                 <div className="brainrot-canvas-zoom" aria-label="Canvas zoom controls">
                   <button
@@ -1876,6 +2475,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                           isSelected={selectedNode === node.id}
                           onPointerDown={handleNodePointerDown}
                           onSelect={setSelectedNode}
+                          onOpenEditor={openNodeEditor}
                         />
                       ) : (
                         <CanvasCustomNode
@@ -1884,6 +2484,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                           isSelected={selectedNode === node.id}
                           onPointerDown={handleNodePointerDown}
                           onSelect={setSelectedNode}
+                          onOpenEditor={openNodeEditor}
                         />
                       )
                     )}
@@ -1909,30 +2510,68 @@ export function Feature2Page({ session }: Feature2PageProps) {
             </div>
           </article>
 
-          <article className="brainrot-surface">
-            <div className="brainrot-surface__header">
-              <div>
-                <span className="brainrot-surface__eyebrow">Inspector</span>
-                <h2>
-                  {selectedCoreStage
-                    ? coreFlowMap[selectedCoreStage].title
-                    : selectedCustomNode?.title ?? 'Node'}
-                </h2>
-                <p>
-                  {selectedCoreStage
-                    ? coreFlowMap[selectedCoreStage].summary
-                    : 'Edit the freeform note, move it, or remove it from the canvas.'}
-                </p>
-              </div>
-              {selectedCoreStage ? (
-                <code className="brainrot-inspector__code">
-                  {coreFlowMap[selectedCoreStage].code}
-                </code>
-              ) : null}
-            </div>
+          {isNodeEditorOpen && typeof document !== 'undefined'
+            ? createPortal(
+            <div
+              className="brainrot-modal-backdrop brainrot-modal-backdrop--node-editor"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) {
+                  closeNodeEditor();
+                }
+              }}
+              role="presentation"
+            >
+              <div
+                aria-labelledby="brainrot-node-dialog-title"
+                aria-modal="true"
+                className="brainrot-node-editor-modal"
+                role="dialog"
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <div className="brainrot-node-editor-modal__header">
+                  <div>
+                    <span className="brainrot-surface__eyebrow">Node editor</span>
+                    <h2 id="brainrot-node-dialog-title">{selectedNodeTitle}</h2>
+                    <p>{selectedNodeDescription}</p>
+                  </div>
+                  <button
+                    aria-label="Close node editor"
+                    className="brainrot-modal__close"
+                    type="button"
+                    onClick={closeNodeEditor}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {selectedNodeCode ? (
+                  <div className="brainrot-node-editor-modal__meta">
+                    <code className="brainrot-inspector__code">{selectedNodeCode}</code>
+                  </div>
+                ) : null}
+
+                <div className="brainrot-node-editor-modal__body">
 
             {selectedCoreStage === 'prompt' ? (
               <div className="brainrot-inspector__body brainrot-form-grid">
+                <div className="brainrot-option-grid">
+                  {BRAINROT_TEMPLATE_PRESETS.map((template) => (
+                    <button
+                      key={template.id}
+                      className={`brainrot-selection-card ${
+                        selectedTemplateId === template.id ? 'brainrot-selection-card--active' : ''
+                      }`}
+                      type="button"
+                      onClick={() => handleSelectTemplate(template.id)}
+                    >
+                      <div className="brainrot-selection-card__meta">
+                        <span>{template.tag}</span>
+                        <strong>{template.label}</strong>
+                      </div>
+                      <p>{template.description}</p>
+                    </button>
+                  ))}
+                </div>
                 <div className="brainrot-type-grid">
                   {BRAINROT_TYPE_PRESETS.map((preset) => (
                     <button
@@ -1956,9 +2595,75 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   ))}
                 </div>
                 <div className="brainrot-static-card">
+                  <span>Opening card</span>
+                  <strong>
+                    {introCard.enabled
+                      ? `${formatIntroCardHandle(introCard.title)} • ${INTRO_CARD_DURATION_SECONDS.toFixed(1)}s`
+                      : 'Disabled'}
+                  </strong>
+                  <p>
+                    The opener is now a rounded story post card that sits alone for the
+                    first three seconds before narration and captions begin.
+                  </p>
+                  {introCard.enabled ? <RedditIntroCardPreview introCard={introCard} /> : null}
+                </div>
+                <label className="brainrot-form-field">
+                  <span>Card account</span>
+                  <input
+                    type="text"
+                    value={introCard.title}
+                    onChange={(event) =>
+                      setIntroCard((current) => ({
+                        ...current,
+                        title: event.target.value,
+                      }))
+                    }
+                    placeholder="Story Watch"
+                  />
+                </label>
+                <label className="form-field">
+                  <span>Card question</span>
+                  <textarea
+                    rows={3}
+                    value={introCard.question}
+                    onChange={(event) =>
+                      setIntroCard((current) => ({
+                        ...current,
+                        question: event.target.value,
+                      }))
+                    }
+                    placeholder="What family tradition ruined your family?"
+                  />
+                </label>
+                <div className="brainrot-mini-grid">
+                  <div className="brainrot-mini-card">
+                    <span>Opening card length</span>
+                    <strong>{INTRO_CARD_DURATION_SECONDS.toFixed(1)}s</strong>
+                  </div>
+                  <div className="brainrot-mini-card">
+                    <span>Story start</span>
+                    <strong>After the intro card</strong>
+                  </div>
+                </div>
+                <label className="brainrot-form-field">
+                  <span>Opening card</span>
+                  <select
+                    value={introCard.enabled ? 'enabled' : 'disabled'}
+                    onChange={(event) =>
+                      setIntroCard((current) => ({
+                        ...current,
+                        enabled: event.target.value === 'enabled',
+                      }))
+                    }
+                  >
+                    <option value="enabled">Enabled</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </label>
+                <div className="brainrot-static-card">
                   <span>Target duration</span>
                   <strong>{targetDurationSeconds} seconds</strong>
-                  <p>Gemini and the final reel now both aim for this length range.</p>
+                  <p>Gemini, the voiceover, and the final reel now all aim for this length range.</p>
                 </div>
                 <div className="brainrot-pill-row">
                   {TARGET_DURATION_PRESETS.map((value) => (
@@ -1995,12 +2700,19 @@ export function Feature2Page({ session }: Feature2PageProps) {
                     value={promptInput}
                     onChange={(event) => {
                       setPromptInput(event.target.value);
+                      setIntroCard((current) => ({
+                        ...current,
+                        question:
+                          current.question === selectedTemplate.defaultIntroQuestion
+                            ? event.target.value
+                            : current.question,
+                      }));
                       if (!manualScriptMode) {
                         setScriptDraft('');
                         setLastGeneratedScript(null);
                       }
                     }}
-                    placeholder="Describe the idea, angle, or claim the brain rot reel should cover."
+                    placeholder="What family tradition ruined your family?"
                   />
                 </label>
                 <label className="form-field">
@@ -2059,6 +2771,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                 <div className="brainrot-pill-row">
                   {([
                     ['recommended', 'Recommended'],
+                    ['expressive-female', 'Expressive female'],
                     ['expressive-male', 'Expressive male'],
                     ['all', 'All voices'],
                     ['cloned', 'Cloned'],
@@ -2277,7 +2990,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   ))}
                 </div>
 
-                {selectedGameplayPreset.source === 'remote' ? (
+                {isCustomRemoteGameplayPreset ? (
                   <>
                     <label className="form-field">
                       <span>Remote gameplay URL</span>
@@ -2300,16 +3013,33 @@ export function Feature2Page({ session }: Feature2PageProps) {
                     </div>
                   </>
                 ) : (
-                  <div className="brainrot-action-row">
-                    <button
-                      className="btn btn--ghost"
-                      type="button"
-                      onClick={() => void prepareGameplay()}
-                      disabled={isPreparingGameplay}
-                    >
-                      {isPreparingGameplay ? 'Preparing...' : 'Refresh built-in gameplay'}
-                    </button>
-                  </div>
+                  <>
+                    <div className="brainrot-static-card">
+                      <span>Footage source</span>
+                      <strong>
+                        {selectedGameplayPreset.source === 'remote'
+                          ? 'Built-in satisfying stock clip'
+                          : 'Built-in Subway Surfers clip'}
+                      </strong>
+                      <p>
+                        {selectedGameplayPreset.source === 'remote'
+                          ? 'This template uses a direct free-stock satisfying video so it works without a manual upload.'
+                          : 'This template uses the local Subway Surfers gameplay cache and keeps the whole bed muted.'}
+                      </p>
+                    </div>
+                    {selectedGameplayPreset.source === 'local' ? (
+                      <div className="brainrot-action-row">
+                        <button
+                          className="btn btn--ghost"
+                          type="button"
+                          onClick={() => void prepareGameplay()}
+                          disabled={isPreparingGameplay}
+                        >
+                          {isPreparingGameplay ? 'Preparing...' : 'Refresh built-in gameplay'}
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
                 )}
 
                 <div className="brainrot-preview-card">
@@ -2317,7 +3047,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                     <video autoPlay loop muted playsInline src={gameplayPreviewUrl} />
                   ) : (
                     <div className="brainrot-empty-state">
-                      {selectedGameplayPreset.source === 'remote'
+                      {isCustomRemoteGameplayPreset
                         ? 'Attach a remote gameplay feed to fill the frame.'
                         : isPreparingGameplay
                           ? 'Preparing the built-in Subway Surfers mezzanine for Cloudinary.'
@@ -2341,8 +3071,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   </label>
                 ) : (
                   <div className="brainrot-inline-note">
-                    Remote gameplay feeds start from the head of the resolved clip unless their
-                    duration is known.
+                    Built-in satisfying clips start from the head and loop automatically to match
+                    the voiceover length.
                   </div>
                 )}
                 <label className="brainrot-form-field">
@@ -2379,8 +3109,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   <div className="brainrot-mini-card">
                     <span>Mode</span>
                     <strong>
-                      {selectedGameplayPreset.source === 'remote'
+                      {isCustomRemoteGameplayPreset
                         ? 'Remote gameplay feed'
+                        : selectedGameplayPreset.source === 'remote'
+                          ? 'Built-in satisfying stock'
                         : isGameplayFallback
                           ? 'Fallback Cloudinary asset'
                           : isGameplayCached
@@ -2406,9 +3138,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                     >
                       <div className="brainrot-selection-card__meta">
                         <span>{preset.tag}</span>
-                        <strong style={{ fontFamily: preset.previewFontFamily }}>
-                          {preset.label}
-                        </strong>
+                        <strong>{preset.label}</strong>
                       </div>
                       <p>{preset.description}</p>
                     </button>
@@ -2417,10 +3147,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
                 <div className="brainrot-static-card">
                   <span>Caption mode</span>
-                  <strong>Timed captions from the Gemini script</strong>
+                  <strong>Timed short-phrase captions synced to the ElevenLabs voice</strong>
                   <p>
-                    The script becomes a Cloudinary subtitle track. The hook below is kept for the
-                    node summary and as the fallback if subtitle generation fails.
+                    The caption track is now built from the synthesized voice timing, not from a
+                    rough duration estimate. The hook below is kept for the node summary and as the
+                    fallback if subtitle generation fails.
                   </p>
                 </div>
 
@@ -2456,7 +3187,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
                 <div className="brainrot-static-card">
                   <span>Caption staging</span>
-                  <strong>Drag the caption box over the Subway Surfers preview, then resize it</strong>
+                  <strong>Drag the caption box over the preview, then resize it</strong>
                   <p>
                     The generated caption cues will use this same screen position and font size
                     when the reel is rendered.
@@ -2471,7 +3202,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                     <video autoPlay loop muted playsInline src={captionLayoutPreviewUrl} />
                   ) : (
                     <div className="brainrot-empty-state brainrot-empty-state--tall">
-                      Gameplay preview will appear here once the Subway Surfers bed is ready.
+                      Gameplay preview will appear here once the background bed is ready.
                     </div>
                   )}
                   <div
@@ -2482,13 +3213,25 @@ export function Feature2Page({ session }: Feature2PageProps) {
                       top: captionPreviewPosition.top,
                       transform: captionPreviewPosition.transform,
                       color: captionStyle.textColor,
-                      backgroundColor: withAlpha(captionStyle.backgroundColor, 0.82),
+                      backgroundColor: captionStyle.backgroundVisible
+                        ? withAlpha(captionStyle.backgroundColor, 0.82)
+                        : 'transparent',
                       fontFamily: resolveCaptionGuideFontFamily(captionStyle.fontFamily),
                       fontSize: `${captionGuideFontSize}px`,
                       fontWeight: captionStyle.fontWeight,
-                      boxShadow: `0 24px 60px ${withAlpha(captionStyle.backgroundColor, 0.28)}`,
+                      WebkitTextStroke: `${Math.max(
+                        1,
+                        Math.round(captionStyle.strokeWidth * CAPTION_PREVIEW_FONT_SCALE)
+                      )}px ${captionStyle.strokeColor}`,
+                      textShadow: captionStyle.backgroundVisible
+                        ? 'none'
+                        : `0 6px 20px ${withAlpha(captionStyle.strokeColor, 0.52)}`,
+                      boxShadow: captionStyle.backgroundVisible
+                        ? `0 24px 60px ${withAlpha(captionStyle.backgroundColor, 0.28)}`
+                        : `0 24px 60px ${withAlpha(captionStyle.strokeColor, 0.22)}`,
                     }}
                     onPointerDown={handleCaptionEditorPointerDown}
+                    onMouseDown={handleCaptionEditorMouseDown}
                   >
                     <span className="brainrot-caption-stage__tag">Drag caption</span>
                     <span className="brainrot-caption-stage__body">
@@ -2498,6 +3241,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                       className="brainrot-caption-stage__resize"
                       type="button"
                       onPointerDown={handleCaptionResizePointerDown}
+                      onMouseDown={handleCaptionResizeMouseDown}
                     >
                       ↘
                     </button>
@@ -2515,41 +3259,6 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   </div>
                 </div>
 
-                <label className="brainrot-form-field">
-                  <span>Font family</span>
-                  <select
-                    value={captionStyle.fontFamily}
-                    onChange={(event) =>
-                      setCaptionStyle((current) => ({
-                        ...current,
-                        fontFamily: event.target.value as BrainrotCaptionStyle['fontFamily'],
-                      }))
-                    }
-                  >
-                    {BRAINROT_FONT_OPTIONS.map((font) => (
-                      <option key={font} value={font}>
-                        {font}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="brainrot-form-field">
-                  <span>Font weight</span>
-                  <select
-                    value={captionStyle.fontWeight}
-                    onChange={(event) =>
-                      setCaptionStyle((current) => ({
-                        ...current,
-                        fontWeight: event.target.value as BrainrotCaptionStyle['fontWeight'],
-                      }))
-                    }
-                  >
-                    <option value="bold">Bold</option>
-                    <option value="normal">Normal</option>
-                  </select>
-                </label>
-
                 <label className="brainrot-range-field">
                   <div>
                     <span>Font size</span>
@@ -2564,6 +3273,46 @@ export function Feature2Page({ session }: Feature2PageProps) {
                       setCaptionStyle((current) => ({
                         ...current,
                         fontSize: Number(event.target.value),
+                      }))
+                    }
+                  />
+                </label>
+
+                <label className="brainrot-range-field">
+                  <div>
+                    <span>Words per cue</span>
+                    <strong>{captionStyle.maxWordsPerCue}</strong>
+                  </div>
+                  <input
+                    type="range"
+                    min={2}
+                    max={6}
+                    step={1}
+                    value={captionStyle.maxWordsPerCue}
+                    onChange={(event) =>
+                      setCaptionStyle((current) => ({
+                        ...current,
+                        maxWordsPerCue: Number(event.target.value),
+                      }))
+                    }
+                  />
+                </label>
+
+                <label className="brainrot-range-field">
+                  <div>
+                    <span>Outline width</span>
+                    <strong>{captionStyle.strokeWidth}px</strong>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={8}
+                    step={1}
+                    value={captionStyle.strokeWidth}
+                    onChange={(event) =>
+                      setCaptionStyle((current) => ({
+                        ...current,
+                        strokeWidth: Number(event.target.value),
                       }))
                     }
                   />
@@ -2612,6 +3361,22 @@ export function Feature2Page({ session }: Feature2PageProps) {
                 </label>
 
                 <div className="brainrot-color-grid">
+                  <label className="brainrot-form-field">
+                    <span>Caption background</span>
+                    <select
+                      value={captionStyle.backgroundVisible ? 'visible' : 'transparent'}
+                      onChange={(event) =>
+                        setCaptionStyle((current) => ({
+                          ...current,
+                          backgroundVisible: event.target.value === 'visible',
+                        }))
+                      }
+                    >
+                      <option value="transparent">Transparent</option>
+                      <option value="visible">Visible block</option>
+                    </select>
+                  </label>
+
                   <label className="brainrot-color-field">
                     <span>Text color</span>
                     <div>
@@ -2639,7 +3404,33 @@ export function Feature2Page({ session }: Feature2PageProps) {
                   </label>
 
                   <label className="brainrot-color-field">
-                    <span>Caption background</span>
+                    <span>Outline color</span>
+                    <div>
+                      <input
+                        type="color"
+                        value={captionStyle.strokeColor}
+                        onChange={(event) =>
+                          setCaptionStyle((current) => ({
+                            ...current,
+                            strokeColor: event.target.value,
+                          }))
+                        }
+                      />
+                      <input
+                        type="text"
+                        value={captionStyle.strokeColor}
+                        onChange={(event) =>
+                          setCaptionStyle((current) => ({
+                            ...current,
+                            strokeColor: event.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                  </label>
+
+                  <label className="brainrot-color-field">
+                    <span>Caption background color</span>
                     <div>
                       <input
                         type="color"
@@ -2719,6 +3510,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
                       layoutStyle,
                       durationSeconds: targetDurationSeconds,
                       timedCaptions: true,
+                      introCard,
                     })).map((item) => (
                     <div className="brainrot-plan__item" key={item}>
                       {item}
@@ -2802,7 +3594,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
                 </div>
               </div>
             ) : null}
-          </article>
+                </div>
+              </div>
+            </div>
+            , document.body)
+            : null}
         </div>
 
         <aside className="brainrot-builder__aside">
@@ -2951,8 +3747,10 @@ export function Feature2Page({ session }: Feature2PageProps) {
                 <span>Gameplay bed</span>
                 <strong>{gameplayAsset?.label ?? 'Waiting for gameplay prep'}</strong>
                 <p>
-                  {selectedGameplayPreset.source === 'remote'
+                  {isCustomRemoteGameplayPreset
                     ? 'Using the attached remote gameplay feed.'
+                    : selectedGameplayPreset.source === 'remote'
+                      ? 'Using the built-in satisfying stock background.'
                     : isGameplayFallback
                       ? 'Using fallback Cloudinary asset.'
                       : 'Using the local gameplay cache.'}
@@ -2982,8 +3780,8 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
       {isRunDialogOpen ? (
         <div
-          className="brainrot-modal-backdrop"
-          onClick={(event) => {
+          className="brainrot-dialog-backdrop"
+          onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
               setIsRunDialogOpen(false);
             }
@@ -2993,10 +3791,11 @@ export function Feature2Page({ session }: Feature2PageProps) {
           <div
             aria-labelledby="brainrot-run-dialog-title"
             aria-modal="true"
-            className="brainrot-modal"
+            className="brainrot-dialog"
             role="dialog"
+            onMouseDown={(event) => event.stopPropagation()}
           >
-            <div className="brainrot-modal__header">
+            <div className="brainrot-dialog__header">
               <div>
                 <span className="brainrot-surface__eyebrow">Gemini Input</span>
                 <h2 id="brainrot-run-dialog-title">Review the script prompt before running</h2>
@@ -3014,7 +3813,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
               </button>
             </div>
 
-            <div className="brainrot-modal__body brainrot-form-grid">
+            <div className="brainrot-dialog__body brainrot-form-grid">
               <label className="form-field">
                 <span>Topic prompt</span>
                 <textarea
@@ -3048,7 +3847,7 @@ export function Feature2Page({ session }: Feature2PageProps) {
               ) : null}
             </div>
 
-            <div className="brainrot-modal__actions">
+            <div className="brainrot-dialog__actions">
               <button
                 className="btn btn--ghost"
                 type="button"

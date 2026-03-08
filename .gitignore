@@ -13,6 +13,7 @@ dist-ssr
 *.local
 .cache/
 .playwright-cli/
+output/
 
 # Environment variables
 .env

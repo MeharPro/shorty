@@ -22,9 +22,9 @@ const BRAINROT_TYPES = {
     description: 'Rapid-fire curiosity bait with strange but broadly understandable observations.',
   },
   'reddit-drama': {
-    label: 'Reddit Drama',
+    label: 'Drama Recap',
     description:
-      'Tell it like a messy relationship or AITA recap with tension, stakes, and a payoff.',
+      'Tell it like a messy relationship or family recap with tension, stakes, and a payoff, but keep it platform-agnostic.',
   },
   'money-panic': {
     label: 'Money Panic',
@@ -69,6 +69,41 @@ function clamp(value, min, max, fallback) {
 function deriveCaption(scriptText) {
   const words = cleanSentence(scriptText, '').split(' ').filter(Boolean).slice(0, 8);
   return words.join(' ') || 'Watch this one closely';
+}
+
+function stripPlatformTerms(value) {
+  return String(value || '')
+    .replace(/\breddit\b/gi, '')
+    .replace(/\bsubreddit\b/gi, '')
+    .replace(/\baita\b/gi, 'story')
+    .replace(/\br\/[a-z0-9_]+\b/gi, 'the story')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([!?.,:;])/g, '$1')
+    .trim();
+}
+
+function sanitizeScriptPackage(scriptPackage, fallback) {
+  const spokenScript = cleanSentence(
+    stripPlatformTerms(scriptPackage.spokenScript),
+    fallback.spokenScript
+  );
+  const captionText = cleanSentence(
+    stripPlatformTerms(scriptPackage.captionText),
+    deriveCaption(spokenScript)
+  ).slice(0, 72);
+
+  return {
+    title: cleanSentence(stripPlatformTerms(scriptPackage.title), fallback.title).slice(0, 64),
+    hook: cleanSentence(stripPlatformTerms(scriptPackage.hook), fallback.hook).slice(0, 48),
+    spokenScript,
+    captionText,
+    visualNotes: Array.isArray(scriptPackage.visualNotes)
+      ? scriptPackage.visualNotes
+          .map((item) => cleanSentence(stripPlatformTerms(item), ''))
+          .filter(Boolean)
+          .slice(0, 3)
+      : fallback.visualNotes,
+  };
 }
 
 function estimateWordRange(targetDurationSeconds) {
@@ -202,7 +237,7 @@ export default async function handler(req, res) {
             parts: [
               {
                 text:
-                  'You write tight vertical-video voiceovers for short-form reels. Output only JSON. No markdown. No emojis. No hashtags. No quotation marks around fields. Keep the voiceover punchy, natural, and clear. Do not mention Subway Surfers, subway trains, gameplay footage, split screens, captions, or background video unless the user explicitly asks for them.',
+                  'You write tight vertical-video voiceovers for short-form reels. Output only JSON. No markdown. No emojis. No hashtags. No quotation marks around fields. Keep the voiceover punchy, natural, and clear. Do not mention Reddit, subreddits, AITA, r-slash communities, Subway Surfers, subway trains, gameplay footage, split screens, captions, or background video unless the user explicitly asks for them.',
               },
             ],
           },
@@ -259,7 +294,7 @@ export default async function handler(req, res) {
 
     const fallback = fallbackScriptPackage(prompt, type, targetDurationSeconds);
     const parsed = parseGeminiText(payload) || fallback;
-    const scriptPackage = {
+    const scriptPackage = sanitizeScriptPackage({
       title: cleanSentence(parsed.title, `${type.label} Breakdown`).slice(0, 64),
       hook: cleanSentence(parsed.hook, 'This gets weird fast').slice(0, 48),
       spokenScript: cleanSentence(parsed.spokenScript, fallback.spokenScript),
@@ -267,7 +302,7 @@ export default async function handler(req, res) {
       visualNotes: Array.isArray(parsed.visualNotes)
         ? parsed.visualNotes.map((item) => cleanSentence(item, '')).filter(Boolean).slice(0, 3)
         : fallback.visualNotes,
-    };
+    }, fallback);
 
     res.status(200).json({
       model,

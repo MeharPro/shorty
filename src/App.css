@@ -1555,6 +1555,30 @@
   align-items: center;
 }
 
+.brainrot-flow-actions__prompt {
+  display: grid;
+  gap: 6px;
+  min-width: min(320px, 100%);
+  flex: 1 1 260px;
+}
+
+.brainrot-flow-actions__prompt span {
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.brainrot-flow-actions__prompt input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.78);
+  color: var(--text-primary);
+}
+
 .brainrot-run-button {
   min-width: 132px;
 }
@@ -1841,6 +1865,25 @@
   gap: 12px;
 }
 
+.brainrot-node__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brainrot-node__menu {
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
 .brainrot-node__step {
   font-size: 0.74rem;
   font-weight: 700;
@@ -2050,10 +2093,10 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: min(62%, 320px);
+  width: min(68%, 360px);
   padding: 14px 16px 18px;
   border-radius: 18px;
-  border: 1px dashed rgba(255, 255, 255, 0.28);
+  border: 1px dashed rgba(255, 255, 255, 0.22);
   text-align: center;
   backdrop-filter: blur(12px);
   cursor: grab;
@@ -2144,6 +2187,131 @@
   line-height: 1.6;
 }
 
+.brainrot-reddit-card {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 14px;
+  padding: 18px;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top right, rgba(248, 113, 113, 0.18), transparent 28%),
+    linear-gradient(180deg, #ffffff, #f8fafc);
+  box-shadow:
+    0 24px 48px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  color: #111827;
+}
+
+.brainrot-reddit-card__avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #fdba74, #f59e0b);
+  color: #ffffff;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.brainrot-reddit-card__content {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.brainrot-reddit-card__header {
+  display: grid;
+  gap: 8px;
+}
+
+.brainrot-reddit-card__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.brainrot-reddit-card__title-row strong {
+  color: #111827;
+  font-size: 1.12rem;
+  line-height: 1.2;
+}
+
+.brainrot-reddit-card__verified {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #38bdf8;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.brainrot-reddit-card__badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.brainrot-reddit-card__badges span {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: #111827;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.brainrot-reddit-card__badges span:nth-child(1) {
+  background: #7dd3fc;
+}
+
+.brainrot-reddit-card__badges span:nth-child(2) {
+  background: #fde68a;
+}
+
+.brainrot-reddit-card__badges span:nth-child(3) {
+  background: #fca5a5;
+}
+
+.brainrot-reddit-card__badges span:nth-child(4) {
+  background: #c4b5fd;
+}
+
+.brainrot-reddit-card__badges span:nth-child(5) {
+  background: #86efac;
+}
+
+.brainrot-reddit-card__badges span:nth-child(6) {
+  background: #fdba74;
+}
+
+.brainrot-reddit-card__question {
+  margin: 0;
+  color: #111827;
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.brainrot-reddit-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #9ca3af;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
 .brainrot-form-grid {
   display: grid;
   gap: 18px;
@@ -2229,7 +2397,8 @@
   gap: 10px;
 }
 
-.brainrot-modal-backdrop {
+.brainrot-modal-backdrop,
+.brainrot-dialog-backdrop {
   position: fixed;
   inset: 0;
   z-index: 60;
@@ -2240,7 +2409,13 @@
   backdrop-filter: blur(16px);
 }
 
-.brainrot-modal {
+.brainrot-modal-backdrop--node-editor {
+  z-index: 70;
+}
+
+.brainrot-modal,
+.brainrot-dialog,
+.brainrot-node-editor-modal {
   width: min(760px, 100%);
   max-height: min(90vh, 980px);
   overflow: auto;
@@ -2254,23 +2429,31 @@
 }
 
 .brainrot-modal__header,
-.brainrot-modal__actions {
+.brainrot-modal__actions,
+.brainrot-dialog__header,
+.brainrot-dialog__actions,
+.brainrot-node-editor-modal__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
 }
 
-.brainrot-modal__header {
+.brainrot-modal__header,
+.brainrot-dialog__header,
+.brainrot-node-editor-modal__header {
   margin-bottom: 20px;
 }
 
-.brainrot-modal__header p {
+.brainrot-modal__header p,
+.brainrot-dialog__header p,
+.brainrot-node-editor-modal__header p {
   margin: 10px 0 0;
   color: var(--text-secondary);
 }
 
-.brainrot-modal__body {
+.brainrot-modal__body,
+.brainrot-dialog__body {
   margin-bottom: 20px;
 }
 
@@ -2293,8 +2476,27 @@
   line-height: 1.7;
 }
 
+.brainrot-dialog {
+  width: min(780px, calc(100vw - 40px));
+}
+
+.brainrot-dialog__actions,
 .brainrot-modal__actions {
   justify-content: flex-end;
+}
+
+.brainrot-node-editor-modal {
+  width: min(900px, calc(100vw - 40px));
+  z-index: 71;
+}
+
+.brainrot-node-editor-modal__meta {
+  margin-bottom: 18px;
+}
+
+.brainrot-node-editor-modal__body {
+  display: grid;
+  gap: 18px;
 }
 
 .brainrot-plan__item {
