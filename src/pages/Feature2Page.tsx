@@ -9,6 +9,7 @@ import { Link, Navigate } from 'react-router-dom';
 import boltLogo from '../assets/bolt-logo.png';
 import { AgentChatPanel } from '../components/agent/AgentChatPanel';
 import { WorkflowSidebarTabs } from '../components/agent/WorkflowSidebarTabs';
+import { loadBrainrotHistory, saveBrainrotHistory } from '../lib/persistence';
 import {
   BRAINROT_FRAME_HEIGHT,
   BRAINROT_FRAME_WIDTH,
@@ -57,7 +58,12 @@ import type { AgentCommandResponse, CustomBlockDefinition } from '../lib/agent/t
 import { useWorkflowAgent } from '../lib/agent/useWorkflowAgent';
 import { buildPlayableSourceUrl } from '../lib/rendering';
 import type { ShortySession } from '../lib/session';
-import type { MediaAsset } from '../types';
+import {
+  fetchBrainrotHistory,
+  hasSupabaseBrowserConfig,
+  persistBrainrotHistoryEntry,
+} from '../lib/supabase';
+import type { BrainrotHistoryEntry, BrainrotSavedRender, MediaAsset } from '../types';
 
 interface Feature2PageProps {
   session: ShortySession | null;
@@ -85,25 +91,7 @@ interface ActivityLogEntry {
   timestamp: string;
 }
 
-interface GeneratedRender {
-  id: string;
-  label: string;
-  seriesLabel: string;
-  deliveryUrl: string;
-  posterUrl: string;
-  generatedAt: string;
-  plan: string[];
-  script: BrainrotScriptPackage;
-  introCard: BrainrotIntroCard;
-  captionText: string;
-  audioAsset: BrainrotAudioAsset;
-  subtitleAsset: BrainrotSubtitleAsset | null;
-  voiceName: string;
-  voiceProvider: string;
-  gameplayLabel: string;
-  typeLabel: string;
-  durationSeconds: number;
-}
+type GeneratedRender = BrainrotSavedRender;
 
 interface BrainrotBatchSettings {
   videoCount: number;
@@ -960,6 +948,9 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const [activeRunStage, setActiveRunStage] = useState<BrainrotStageId | null>(null);
   const [batchSettings, setBatchSettings] = useState<BrainrotBatchSettings>(DEFAULT_BATCH_SETTINGS);
   const [generatedRenders, setGeneratedRenders] = useState<GeneratedRender[]>([]);
+  const [savedRuns, setSavedRuns] = useState<BrainrotHistoryEntry[]>(() =>
+    loadBrainrotHistory(sessionUserKey)
+  );
   const [selectedGeneratedRenderIndex, setSelectedGeneratedRenderIndex] = useState(0);
   const [lastRunSignature, setLastRunSignature] = useState('');
   const [isRunDialogOpen, setIsRunDialogOpen] = useState(false);
@@ -1164,6 +1155,31 @@ export function Feature2Page({ session }: Feature2PageProps) {
   const activeScript = generatedRender?.script ?? lastGeneratedScript;
   const activeVoiceAsset = generatedRender?.audioAsset ?? voiceAsset;
   const activeSubtitleAsset = generatedRender?.subtitleAsset ?? subtitleAsset;
+
+  useEffect(() => {
+    let isMounted = true;
+    const localHistory = loadBrainrotHistory(sessionUserKey);
+    setSavedRuns(localHistory);
+
+    if (!hasSupabaseBrowserConfig || !session?.userId) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    void fetchBrainrotHistory(session.userId).then((response) => {
+      if (!isMounted || !response.ok) {
+        return;
+      }
+
+      setSavedRuns(response.entries);
+      saveBrainrotHistory(sessionUserKey, response.entries);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [session?.userId, sessionUserKey]);
 
   useEffect(() => {
     const node = canvasStageRef.current;
@@ -2540,31 +2556,68 @@ export function Feature2Page({ session }: Feature2PageProps) {
         }
       }
 
-      setLastRunSignature(
-        createRunSignature({
-          templateId: selectedTemplateId,
-          prompt: effectivePromptInput,
-          scriptGuidance: effectiveScriptGuidance,
-          brainrotType,
-          targetDurationSeconds,
-          selectedVoiceId,
-          selectedGameplayPresetId,
-          remoteGameplayUrl,
-          selectedCaptionPresetId,
-          voiceSettings,
-          scriptText: firstRender?.script.spokenScript || scriptDraft,
-          captionText: firstRender?.captionText || captionText,
-          captionStyle,
-          layoutStyle,
-          introCard: firstRender?.introCard || introCard,
-          gameplayStartOffset: safeOffset,
-          manualScriptMode,
-          manualCaptionMode,
-          batchSettings: effectiveBatchSettings,
-          introCardTitleManual: isIntroCardTitleManual,
-          introCardQuestionManual: isIntroCardQuestionManual,
-        })
-      );
+      const completedRunSignature = createRunSignature({
+        templateId: selectedTemplateId,
+        prompt: effectivePromptInput,
+        scriptGuidance: effectiveScriptGuidance,
+        brainrotType,
+        targetDurationSeconds,
+        selectedVoiceId,
+        selectedGameplayPresetId,
+        remoteGameplayUrl,
+        selectedCaptionPresetId,
+        voiceSettings,
+        scriptText: firstRender?.script.spokenScript || scriptDraft,
+        captionText: firstRender?.captionText || captionText,
+        captionStyle,
+        layoutStyle,
+        introCard: firstRender?.introCard || introCard,
+        gameplayStartOffset: safeOffset,
+        manualScriptMode,
+        manualCaptionMode,
+        batchSettings: effectiveBatchSettings,
+        introCardTitleManual: isIntroCardTitleManual,
+        introCardQuestionManual: isIntroCardQuestionManual,
+      });
+
+      setLastRunSignature(completedRunSignature);
+
+      const savedEntry: BrainrotHistoryEntry = {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        prompt: effectivePromptInput,
+        scriptGuidance: effectiveScriptGuidance,
+        templateId: selectedTemplateId,
+        brainrotType,
+        targetDurationSeconds,
+        selectedVoiceId,
+        selectedGameplayPresetId,
+        selectedCaptionPresetId,
+        gameplayStartOffset: safeOffset,
+        runSignature: completedRunSignature,
+        batchSettings: effectiveBatchSettings,
+        captionStyle,
+        layoutStyle,
+        introCard: firstRender?.introCard || introCard,
+        renders: nextGeneratedRenders,
+      };
+
+      const nextSavedRuns = [savedEntry, ...savedRuns].slice(0, 10);
+      setSavedRuns(nextSavedRuns);
+      saveBrainrotHistory(sessionUserKey, nextSavedRuns);
+
+      if (hasSupabaseBrowserConfig && session?.userId) {
+        const syncResult = await persistBrainrotHistoryEntry(session.userId, savedEntry);
+        appendLog(
+          syncResult.persisted
+            ? 'Saved the prompt, scripts, and render metadata to Supabase.'
+            : `Saved locally; Supabase sync skipped: ${syncResult.reason}`,
+          syncResult.persisted ? 'success' : 'warn'
+        );
+      } else {
+        appendLog('Saved the prompt, scripts, and render metadata locally.', 'info');
+      }
+
       setRenderState('complete');
       setActiveRunStage(null);
       setStatusMessage(
@@ -2672,9 +2725,6 @@ export function Feature2Page({ session }: Feature2PageProps) {
       let nextBatchSettings = { ...batchSettings };
       let nextVoiceFilterMode = voiceFilterMode;
       let nextSelectedVoiceId = selectedVoiceId;
-      let nextSelectedGameplayPresetId = selectedGameplayPresetId;
-      let nextGameplayOffset = gameplayStartOffset;
-      let nextGameplayGravity = layoutStyle.gameplayGravity;
       let shouldRun = response.execution.shouldRun;
 
       const buildAgentCustomNode = (block: CustomBlockDefinition) => {
@@ -2817,20 +2867,6 @@ export function Feature2Page({ session }: Feature2PageProps) {
           return;
         }
 
-        if (action.type === 'update_node_params' && action.targetNodeId === 'gameplay') {
-          if (typeof action.params?.gameplayPresetId === 'string') {
-            const preset =
-              BRAINROT_GAMEPLAY_PRESETS.find((entry) => entry.id === action.params?.gameplayPresetId) ??
-              null;
-            if (preset) {
-              nextSelectedGameplayPresetId = preset.id;
-              nextGameplayOffset = preset.defaultOffset;
-              nextGameplayGravity = preset.defaultGravity;
-            }
-          }
-          return;
-        }
-
         if (action.type === 'update_node_params' && action.targetNodeId === 'caption') {
           if (typeof action.params?.captionText === 'string') {
             nextCaptionText = action.params.captionText;
@@ -2863,12 +2899,6 @@ export function Feature2Page({ session }: Feature2PageProps) {
       setBatchSettings(nextBatchSettings);
       setVoiceFilterMode(nextVoiceFilterMode);
       setSelectedVoiceId(nextSelectedVoiceId);
-      setSelectedGameplayPresetId(nextSelectedGameplayPresetId);
-      setGameplayStartOffset(nextGameplayOffset);
-      setLayoutStyle((current) => ({
-        ...current,
-        gameplayGravity: nextGameplayGravity,
-      }));
       setStatusMessage(response.summary);
       appendLog(response.summary, 'info');
       setPendingAgentRun(
@@ -2879,18 +2909,6 @@ export function Feature2Page({ session }: Feature2PageProps) {
             }
           : null
       );
-
-      if (nextSelectedGameplayPresetId !== selectedGameplayPresetId) {
-        const preset =
-          BRAINROT_GAMEPLAY_PRESETS.find((entry) => entry.id === nextSelectedGameplayPresetId) ??
-          BRAINROT_GAMEPLAY_PRESETS[0];
-
-        if (preset.source === 'local') {
-          void prepareGameplay({ quiet: true });
-        } else if (preset.id !== 'custom-remote') {
-          void prepareBuiltInRemoteGameplay(preset, { quiet: true });
-        }
-      }
 
       return shouldRun
         ? 'Queued an automatic run through the current Feature 2 pipeline.'
@@ -2903,14 +2921,9 @@ export function Feature2Page({ session }: Feature2PageProps) {
       canvasSize.width,
       canvasZoom,
       captionText,
-      gameplayStartOffset,
-      layoutStyle.gameplayGravity,
       manualCaptionMode,
-      prepareBuiltInRemoteGameplay,
-      prepareGameplay,
       promptInput,
       scriptGuidance,
-      selectedGameplayPresetId,
       selectedNode,
       selectedVoiceId,
       targetDurationSeconds,

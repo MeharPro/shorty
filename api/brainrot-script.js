@@ -24,7 +24,7 @@ const BRAINROT_TYPES = {
   'reddit-drama': {
     label: 'Drama Recap',
     description:
-      'Tell it like a messy relationship or family recap with tension, stakes, and a payoff, but keep it platform-agnostic.',
+      'Tell it like a messy relationship or family recap with tension, stakes, and a payoff.',
   },
   'money-panic': {
     label: 'Money Panic',
@@ -190,21 +190,25 @@ function estimateWordRange(targetDurationSeconds) {
   };
 }
 
+function normalizePromptIdea(prompt) {
+  return cleanSentence(prompt, 'the topic').replace(/[?!.]+$/g, '').trim() || 'the topic';
+}
+
 function buildFallbackSpokenScript(prompt, type, targetDurationSeconds, variationIndex = 1) {
-  const idea = cleanSentence(prompt, 'the topic');
+  const idea = normalizePromptIdea(prompt);
   const typeDescription = cleanSentence(type?.description, 'Make it feel fast, sticky, and direct.');
   const { minWords } = estimateWordRange(targetDurationSeconds);
   const sentenceBank = [
-    `${idea} sounds simple at first, but the second you look closer it gets stranger.`,
-    `Most people stop at the surface, which is why they miss the one detail that actually changes the whole story.`,
-    `The real pattern is quieter than people expect, and that is exactly why it keeps catching attention when the timing is right.`,
-    `Once you notice how the behavior repeats, the obvious explanation starts to feel way less convincing.`,
-    `That is where the ${cleanSentence(type?.label, 'brain rot')} angle hits, because it turns a familiar idea into something that feels unavoidable.`,
-    `Instead of asking whether this is normal, the better question is why so many people repeat it without realizing what it costs them.`,
-    `The weird part is that the payoff never comes from the loudest moment, it comes from the part people usually scroll past.`,
-    `${typeDescription} That should make the listener feel like they are catching the hidden pattern a second before everyone else does.`,
-    `If you keep watching for long enough, the same signal shows up again and again, and it becomes impossible to call it random.`,
-    `That is why this kind of clip spreads so fast, because it gives you the feeling that you just noticed something important before the crowd did.`,
+    `Start with the main idea: ${idea}.`,
+    `Give the setup in one clean line so the listener immediately understands what the reel is about.`,
+    `Move straight into the tension, conflict, or question that makes the topic worth paying attention to.`,
+    `Name the part people usually miss and explain why it matters in plain language.`,
+    `Keep the pacing tight so every sentence adds one new beat instead of circling the same point.`,
+    `${typeDescription}`,
+    `Land the consequence, payoff, or reframe clearly enough that the ending feels earned.`,
+    `Finish with one direct line that makes the audience want to replay the idea or argue with it.`,
+    `If there is a pattern, spell it out instead of hinting at it vaguely.`,
+    `If there is a decision, cost, or tradeoff, end on that because it gives the reel a real conclusion.`,
   ];
   const assembled = [];
   let wordCount = 0;

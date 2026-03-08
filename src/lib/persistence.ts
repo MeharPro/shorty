@@ -1,4 +1,5 @@
 import type {
+  BrainrotHistoryEntry,
   CreatorDraft,
   ReelHistoryEntry,
   SavedExport,
@@ -10,6 +11,7 @@ const GUEST_WORKSPACE_KEY = 'guest';
 const DRAFT_KEY_PREFIX = 'shorty:draft';
 const HISTORY_KEY_PREFIX = 'shorty:history';
 const REEL_HISTORY_KEY_PREFIX = 'shorty:reels';
+const BRAINROT_HISTORY_KEY_PREFIX = 'shorty:brainrot';
 const UPLOAD_HISTORY_KEY_PREFIX = 'shorty:uploads';
 const TRANSCRIPT_KEY_PREFIX = 'shorty:transcript';
 const LEGACY_SHORTY_DRAFT_KEY = 'shorty:draft:v1';
@@ -33,6 +35,10 @@ function exportHistoryKey(userKey?: string): string {
 
 function reelHistoryKey(userKey?: string): string {
   return `${REEL_HISTORY_KEY_PREFIX}:${workspaceKey(userKey)}:v1`;
+}
+
+function brainrotHistoryKey(userKey?: string): string {
+  return `${BRAINROT_HISTORY_KEY_PREFIX}:${workspaceKey(userKey)}:v1`;
 }
 
 function uploadHistoryKey(userKey?: string): string {
@@ -122,6 +128,30 @@ export function saveReelHistory(userKey: string | undefined, history: ReelHistor
   }
 
   window.localStorage.setItem(reelHistoryKey(userKey), JSON.stringify(history.slice(0, 10)));
+}
+
+export function loadBrainrotHistory(userKey?: string): BrainrotHistoryEntry[] {
+  if (!canUseStorage()) {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(brainrotHistoryKey(userKey));
+    return raw ? (JSON.parse(raw) as BrainrotHistoryEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveBrainrotHistory(
+  userKey: string | undefined,
+  history: BrainrotHistoryEntry[]
+): void {
+  if (!canUseStorage()) {
+    return;
+  }
+
+  window.localStorage.setItem(brainrotHistoryKey(userKey), JSON.stringify(history.slice(0, 10)));
 }
 
 export interface UploadHistoryItem {

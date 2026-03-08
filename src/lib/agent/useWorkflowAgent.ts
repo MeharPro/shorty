@@ -39,7 +39,7 @@ export function useWorkflowAgent({
   const [messages, setMessages] = useState<WorkflowChatMessage[]>(() => [
     createMessage(
       'assistant',
-      'Workflow agent ready. Describe the edit you want and I will mutate the graph and run the existing pipeline when needed.'
+      'Workflow agent ready. Describe the flow edit you want and I will mutate the graph. I only run the pipeline when you explicitly ask.'
     ),
   ]);
   const [draft, setDraft] = useState('');

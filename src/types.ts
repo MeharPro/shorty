@@ -1,3 +1,16 @@
+import type {
+  BrainrotAudioAsset,
+  BrainrotCaptionPresetId,
+  BrainrotCaptionStyle,
+  BrainrotGameplayPresetId,
+  BrainrotIntroCard,
+  BrainrotLayoutStyle,
+  BrainrotScriptPackage,
+  BrainrotSubtitleAsset,
+  BrainrotTemplateId,
+  BrainrotTypeId,
+} from './lib/brainrot';
+
 export type PlatformId = 'youtube-shorts' | 'instagram-reels' | 'tiktok';
 export type StoryPresetId = 'clip-commander' | 'launch-loop' | 'gameplay-stack';
 export type CaptionThemeId = 'impact' | 'clean-room' | 'night-shift';
@@ -243,6 +256,54 @@ export interface ReelHistoryEntry {
   sourceLabel: string;
   recommendedClipId: string | null;
   result: ReelGenerationResponse;
+}
+
+export type BrainrotScriptVariationMode = 'same-script' | 'different-scripts';
+
+export interface BrainrotBatchSettingsSnapshot {
+  videoCount: number;
+  partLabelsEnabled: boolean;
+  scriptVariationMode: BrainrotScriptVariationMode;
+}
+
+export interface BrainrotSavedRender {
+  id: string;
+  label: string;
+  seriesLabel: string;
+  deliveryUrl: string;
+  posterUrl: string;
+  generatedAt: string;
+  plan: string[];
+  script: BrainrotScriptPackage;
+  introCard: BrainrotIntroCard;
+  captionText: string;
+  audioAsset: BrainrotAudioAsset;
+  subtitleAsset: BrainrotSubtitleAsset | null;
+  voiceName: string;
+  voiceProvider: string;
+  gameplayLabel: string;
+  typeLabel: string;
+  durationSeconds: number;
+}
+
+export interface BrainrotHistoryEntry {
+  id: string;
+  createdAt: string;
+  prompt: string;
+  scriptGuidance: string;
+  templateId: BrainrotTemplateId;
+  brainrotType: BrainrotTypeId;
+  targetDurationSeconds: number;
+  selectedVoiceId: string;
+  selectedGameplayPresetId: BrainrotGameplayPresetId;
+  selectedCaptionPresetId: BrainrotCaptionPresetId;
+  gameplayStartOffset: number;
+  runSignature: string;
+  batchSettings: BrainrotBatchSettingsSnapshot;
+  captionStyle: BrainrotCaptionStyle;
+  layoutStyle: BrainrotLayoutStyle;
+  introCard: BrainrotIntroCard;
+  renders: BrainrotSavedRender[];
 }
 
 export interface VideoTranscriptionResponse {
