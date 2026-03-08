@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom';
 import { Link, Navigate } from 'react-router-dom';
 import boltLogo from '../assets/bolt-logo.png';
 import { AgentChatPanel } from '../components/agent/AgentChatPanel';
+import { CloudinaryRenderedVideo } from '../components/CloudinaryRenderedVideo';
 import { WorkflowSidebarTabs } from '../components/agent/WorkflowSidebarTabs';
 import { loadBrainrotHistory, saveBrainrotHistory } from '../lib/persistence';
 import {
@@ -4916,14 +4917,16 @@ export function Feature2Page({ session }: Feature2PageProps) {
 
                       <div className="brainrot-output-frame">
                         {generatedRender ? (
-                          <video
+                          <CloudinaryRenderedVideo
                             key={generatedRenderUrl}
                             autoPlay
                             controls
                             loop
                             playsInline
+                            preload="metadata"
                             poster={generatedRender.posterUrl}
                             src={generatedRenderUrl}
+                            loadingLabel="Rendering final reel..."
                           />
                         ) : captionLayoutPreviewUrl ? (
                           <video autoPlay loop muted playsInline src={captionLayoutPreviewUrl} />
